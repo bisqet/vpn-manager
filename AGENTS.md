@@ -2,6 +2,8 @@
 
 ## Cursor Cloud specific instructions
 
+The Git default branch for this repository is **`master`**. Open pull requests and base new work on `master` (the `main` branch is not used).
+
 ### Overview
 
 VPN Manager is a monorepo with two apps — a Hono API server (`apps/server`, port 3000) and a Vite + React SPA (`apps/web`, port 5173). The entire stack runs on **Bun** (runtime, package manager, test runner). SQLite is embedded via `bun:sqlite`; no external database needed.

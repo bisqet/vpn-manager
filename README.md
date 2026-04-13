@@ -1,5 +1,7 @@
 # VPN Manager
 
+Development uses the **`master`** branch as the default integration branch.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh/)
