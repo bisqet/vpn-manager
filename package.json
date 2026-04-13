@@ -5,7 +5,8 @@
   "scripts": {
     "dev:server": "bun --cwd apps/server dev",
     "dev:web": "bun --cwd apps/web dev",
-    "build": "bun --cwd apps/web build",
+    "build": "bun run build:web",
+    "build:web": "bun --cwd apps/web build",
     "start": "bun --cwd apps/server start",
     "test": "bun test apps/server"
   }

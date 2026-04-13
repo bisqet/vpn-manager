@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { authQueryKey, fetchCurrentUser } from "./api/client";
 import ChainsPage from "./pages/ChainsPage";
+import ExportPage from "./pages/ExportPage";
 import LoginPage from "./pages/LoginPage";
 import RoutingPage from "./pages/RoutingPage";
 import VpnsPage from "./pages/VpnsPage";
@@ -23,7 +24,7 @@ export default function App() {
         <Route path="/vpns" element={<VpnsPage />} />
         <Route path="/chains" element={<ChainsPage />} />
         <Route path="/routing" element={<RoutingPage />} />
-        <Route path="/export" element={<PlaceholderPage title="Export" />} />
+        <Route path="/export" element={<ExportPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/vpns" replace />} />
     </Routes>
@@ -85,16 +86,6 @@ function ProtectedLayout() {
   );
 }
 
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <section style={cardStyle}>
-      <div style={eyebrowStyle}>Protected route</div>
-      <h2 style={pageTitleStyle}>{title}</h2>
-      <div>Coming soon</div>
-    </section>
-  );
-}
-
 function FullScreenMessage({
   title,
   message,
@@ -150,14 +141,6 @@ const navLinkStyle: CSSProperties = {
   borderRadius: "10px",
   textDecoration: "none",
   fontWeight: 600,
-};
-
-const cardStyle: CSSProperties = {
-  maxWidth: "720px",
-  padding: "24px",
-  borderRadius: "16px",
-  background: "#ffffff",
-  boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
 };
 
 const messageCardStyle: CSSProperties = {

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { join, relative, resolve } from "node:path";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
@@ -37,7 +38,35 @@ export function createApp(db: Database, env: Pick<Env, "masterKey" | "staticDir"
   app.route("/api", api);
 
   if (env.staticDir) {
-    app.use("/*", serveStatic({ root: env.staticDir }));
+    const staticDir = resolve(env.staticDir);
+    const staticRoot = relative(process.cwd(), staticDir).replaceAll("\\", "/") || ".";
+
+    app.use("/*", serveStatic({ root: staticRoot }));
+
+    app.get("*", async (c) => {
+      if (c.req.path.startsWith("/api")) {
+        return c.notFound();
+      }
+
+      const requestPath = c.req.path === "/" ? "index.html" : c.req.path.slice(1);
+      const assetFile = Bun.file(join(staticDir, requestPath));
+
+      if (await assetFile.exists()) {
+        return new Response(assetFile);
+      }
+
+      const acceptsHtml = (c.req.header("accept") ?? "").includes("text/html");
+      if (!acceptsHtml) {
+        return c.notFound();
+      }
+
+      const indexFile = Bun.file(join(staticDir, "index.html"));
+      if (await indexFile.exists()) {
+        return new Response(indexFile);
+      }
+
+      return c.notFound();
+    });
   }
 
   return app;
