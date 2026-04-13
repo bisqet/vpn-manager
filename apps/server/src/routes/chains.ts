@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { buildExportV1, ExportNotFoundError } from "../export/buildExport";
 
 type ChainRow = {
   chain_id: number;
@@ -261,6 +262,28 @@ export function chainsRoutes(db: Database) {
     }
 
     return c.json(getChainById(db, chainId)!, 201);
+  });
+
+  app.get("/:id/export", (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid chain id" }, 400);
+    }
+
+    try {
+      const exportJson = buildExportV1(db, id);
+      return new Response(JSON.stringify(exportJson), {
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Disposition": 'attachment; filename="vpn-manager.routing.v1.json"',
+        },
+      });
+    } catch (error) {
+      if (error instanceof ExportNotFoundError) {
+        return c.json({ error: error.message }, 404);
+      }
+      throw error;
+    }
   });
 
   app.patch("/:id", async (c) => {

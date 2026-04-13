@@ -154,6 +154,80 @@ describe("chainsRoutes", () => {
     expect(db.query("SELECT id FROM routing_profiles WHERE chain_id = ?").get(1)).toBeNull();
   });
 
+  test("downloads a chain export as json", async () => {
+    const app = createApp(db, env);
+    const firstProfileId = seedVpnProfile("Alpha");
+    const secondProfileId = seedVpnProfile("Beta");
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Primary chain",
+        vpnProfileIds: [firstProfileId, secondProfileId],
+      }),
+    });
+
+    expect(createRes.status).toBe(201);
+
+    db.query(
+      "INSERT INTO rules (routing_profile_id, position, match_kind, match_value, action) VALUES (?, ?, ?, ?, ?)",
+    ).run(1, 0, "domain", ".example.com", "block");
+    db.query(
+      "INSERT INTO rules (routing_profile_id, position, match_kind, match_value, action) VALUES (?, ?, ?, ?, ?)",
+    ).run(1, 1, "cidr", "10.0.0.0/8", "direct");
+
+    const exportRes = await app.request("/api/chains/1/export", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+    });
+
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.headers.get("Content-Type")).toContain("application/json");
+    expect(exportRes.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="vpn-manager.routing.v1.json"',
+    );
+    expect(await exportRes.json()).toMatchObject({
+      schemaVersion: 1,
+      name: "Primary chain",
+      chainId: 1,
+      routingProfileId: 1,
+      chain: [
+        {
+          profileId: firstProfileId,
+          host: "alpha.example.com",
+          sshPort: 22,
+          sshUser: "root",
+        },
+        {
+          profileId: secondProfileId,
+          host: "beta.example.com",
+          sshPort: 22,
+          sshUser: "root",
+        },
+      ],
+      routing: {
+        defaultAction: "use_chain",
+        rules: [
+          {
+            matchKind: "domain",
+            matchValue: ".example.com",
+            action: "block",
+          },
+          {
+            matchKind: "cidr",
+            matchValue: "10.0.0.0/8",
+            action: "direct",
+          },
+        ],
+      },
+    });
+  });
+
   test("rejects duplicate vpnProfileIds on create", async () => {
     const app = createApp(db, env);
     const profileId = seedVpnProfile("Alpha");
