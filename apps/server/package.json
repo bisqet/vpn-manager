@@ -8,6 +8,7 @@
     "create-admin": "bun scripts/create-admin.ts"
   },
   "dependencies": {
+    "ip-address": "^10.1.0",
     "hono": "^4.6.0",
     "zod": "^3.23.8",
     "bcryptjs": "^2.4.3"
