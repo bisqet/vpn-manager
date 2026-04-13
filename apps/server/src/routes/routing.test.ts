@@ -33,15 +33,38 @@ describe("routingRoutes", () => {
     };
   }
 
+  function seedVpnProfile() {
+    const result = db
+      .query(
+        `INSERT INTO vpn_profiles (
+          label,
+          host,
+          ssh_port,
+          ssh_user,
+          ssh_password_ciphertext,
+          ssh_password_nonce
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("Alpha", "alpha.example.com", 22, "root", new Uint8Array([1]), new Uint8Array([2]));
+    return Number(result.lastInsertRowid);
+  }
+
   function seedChain(name = "Primary chain") {
     const result = db.query("INSERT INTO chains (name) VALUES (?)").run(name);
     return Number(result.lastInsertRowid);
   }
 
-  function seedRoutingProfile(chainId: number, defaultAction: "use_chain" | "direct" = "use_chain") {
+  function seedHop(chainId: number, position: number, vpnProfileId: number) {
     const result = db
-      .query("INSERT INTO routing_profiles (name, chain_id, default_action) VALUES (?, ?, ?)")
-      .run("Primary chain routing", chainId, defaultAction);
+      .query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)")
+      .run(chainId, position, vpnProfileId);
+    return Number(result.lastInsertRowid);
+  }
+
+  function seedRoutingProfileForHop(chainHopId: number, defaultAction: "use_chain" | "direct" = "use_chain") {
+    const result = db
+      .query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)")
+      .run(`hop ${chainHopId} routing`, chainHopId, defaultAction);
     return Number(result.lastInsertRowid);
   }
 
@@ -63,7 +86,7 @@ describe("routingRoutes", () => {
   test("requires auth for routing routes", async () => {
     const app = createApp(db, env);
 
-    const res = await app.request("/api/routing/by-chain/1");
+    const res = await app.request("/api/routing/by-hop/1");
 
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "Unauthorized" });
@@ -71,19 +94,22 @@ describe("routingRoutes", () => {
 
   test("gets and patches routing profiles with ordered rules", async () => {
     const app = createApp(db, env);
+    const vpnProfileId = seedVpnProfile();
     const chainId = seedChain();
-    const routingProfileId = seedRoutingProfile(chainId);
+    const hopId = seedHop(chainId, 0, vpnProfileId);
+    const routingProfileId = seedRoutingProfileForHop(hopId);
     const firstRuleId = seedRule(routingProfileId, 0, "domain", ".example.com", "block");
     const secondRuleId = seedRule(routingProfileId, 1, "cidr", "10.0.0.0/8", "direct");
 
-    const getRes = await app.request(`/api/routing/by-chain/${chainId}`, {
+    const getRes = await app.request(`/api/routing/by-hop/${hopId}`, {
       headers: authHeaders(),
     });
 
     expect(getRes.status).toBe(200);
     expect(await getRes.json()).toEqual({
       id: routingProfileId,
-      name: "Primary chain routing",
+      name: `hop ${hopId} routing`,
+      chainHopId: hopId,
       chainId,
       defaultAction: "use_chain",
       rules: [
@@ -127,7 +153,8 @@ describe("routingRoutes", () => {
     expect(patchRes.status).toBe(200);
     expect(await patchRes.json()).toEqual({
       id: routingProfileId,
-      name: "Primary chain routing",
+      name: `hop ${hopId} routing`,
+      chainHopId: hopId,
       chainId,
       defaultAction: "direct",
       rules: [
@@ -183,8 +210,10 @@ describe("routingRoutes", () => {
 
   test("rejects invalid domain rules after normalization", async () => {
     const app = createApp(db, env);
+    const vpnProfileId = seedVpnProfile();
     const chainId = seedChain();
-    const routingProfileId = seedRoutingProfile(chainId);
+    const hopId = seedHop(chainId, 0, vpnProfileId);
+    const routingProfileId = seedRoutingProfileForHop(hopId);
 
     const res = await app.request(`/api/routing/${routingProfileId}`, {
       method: "PATCH",
@@ -209,8 +238,10 @@ describe("routingRoutes", () => {
 
   test("rejects invalid cidr rules", async () => {
     const app = createApp(db, env);
+    const vpnProfileId = seedVpnProfile();
     const chainId = seedChain();
-    const routingProfileId = seedRoutingProfile(chainId);
+    const hopId = seedHop(chainId, 0, vpnProfileId);
+    const routingProfileId = seedRoutingProfileForHop(hopId);
 
     const res = await app.request(`/api/routing/${routingProfileId}`, {
       method: "PATCH",

@@ -19,6 +19,7 @@ type RoutingRuleDto = {
 type RoutingProfileDto = {
   id: number;
   name: string;
+  chainHopId: number;
   chainId: number;
   defaultAction: DefaultAction;
   rules: RoutingRuleDto[];
@@ -27,6 +28,7 @@ type RoutingProfileDto = {
 type RoutingProfileRow = {
   routing_profile_id: number;
   routing_profile_name: string;
+  chain_hop_id: number;
   chain_id: number;
   default_action: DefaultAction;
   rule_id: number | null;
@@ -136,6 +138,7 @@ function mapRoutingProfile(rows: RoutingProfileRow[]): RoutingProfileDto | null 
   return {
     id: rows[0].routing_profile_id,
     name: rows[0].routing_profile_name,
+    chainHopId: rows[0].chain_hop_id,
     chainId: rows[0].chain_id,
     defaultAction: rows[0].default_action,
     rules: rows.flatMap((row) => {
@@ -162,13 +165,11 @@ function mapRoutingProfile(rows: RoutingProfileRow[]): RoutingProfileDto | null 
   };
 }
 
-function getRoutingProfileByChainId(db: Database, chainId: number): RoutingProfileDto | null {
-  const rows = db
-    .query<RoutingProfileRow, [number]>(
-      `SELECT
+const routingProfileSelectSql = `SELECT
         rp.id AS routing_profile_id,
         rp.name AS routing_profile_name,
-        rp.chain_id AS chain_id,
+        rp.chain_hop_id AS chain_hop_id,
+        ch.chain_id AS chain_id,
         rp.default_action AS default_action,
         r.id AS rule_id,
         r.position AS rule_position,
@@ -176,11 +177,17 @@ function getRoutingProfileByChainId(db: Database, chainId: number): RoutingProfi
         r.match_value AS rule_match_value,
         r.action AS rule_action
       FROM routing_profiles rp
-      LEFT JOIN rules r ON r.routing_profile_id = rp.id
-      WHERE rp.chain_id = ?
+      JOIN chain_hops ch ON ch.id = rp.chain_hop_id
+      LEFT JOIN rules r ON r.routing_profile_id = rp.id`;
+
+function getRoutingProfileByChainHopId(db: Database, chainHopId: number): RoutingProfileDto | null {
+  const rows = db
+    .query<RoutingProfileRow, [number]>(
+      `${routingProfileSelectSql}
+      WHERE rp.chain_hop_id = ?
       ORDER BY r.position ASC, r.id ASC`,
     )
-    .all(chainId);
+    .all(chainHopId);
 
   return mapRoutingProfile(rows);
 }
@@ -188,18 +195,7 @@ function getRoutingProfileByChainId(db: Database, chainId: number): RoutingProfi
 function getRoutingProfileById(db: Database, routingProfileId: number): RoutingProfileDto | null {
   const rows = db
     .query<RoutingProfileRow, [number]>(
-      `SELECT
-        rp.id AS routing_profile_id,
-        rp.name AS routing_profile_name,
-        rp.chain_id AS chain_id,
-        rp.default_action AS default_action,
-        r.id AS rule_id,
-        r.position AS rule_position,
-        r.match_kind AS rule_match_kind,
-        r.match_value AS rule_match_value,
-        r.action AS rule_action
-      FROM routing_profiles rp
-      LEFT JOIN rules r ON r.routing_profile_id = rp.id
+      `${routingProfileSelectSql}
       WHERE rp.id = ?
       ORDER BY r.position ASC, r.id ASC`,
     )
@@ -211,13 +207,13 @@ function getRoutingProfileById(db: Database, routingProfileId: number): RoutingP
 export function routingRoutes(db: Database) {
   const app = new Hono();
 
-  app.get("/by-chain/:chainId", (c) => {
-    const chainId = parseId(c.req.param("chainId"));
-    if (chainId === null) {
-      return c.json({ error: "Invalid chain id" }, 400);
+  app.get("/by-hop/:chainHopId", (c) => {
+    const chainHopId = parseId(c.req.param("chainHopId"));
+    if (chainHopId === null) {
+      return c.json({ error: "Invalid chain hop id" }, 400);
     }
 
-    const routingProfile = getRoutingProfileByChainId(db, chainId);
+    const routingProfile = getRoutingProfileByChainHopId(db, chainHopId);
     if (!routingProfile) {
       return c.json({ error: "Routing profile not found" }, 404);
     }
