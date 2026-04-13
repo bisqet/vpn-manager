@@ -1,7 +1,7 @@
 # VPN Manager — Web UI (v1) Design
 
 **Date:** 2026-04-13  
-**Status:** Approved (conversation) — pending written-spec review  
+**Status:** Approved (written spec reviewed)  
 **Scope:** Web UI and configuration **generation** only. No live SSH, no host routing enforcement, no bundled GeoIP or country blocklists.
 
 ## 1. Goals and non-goals
