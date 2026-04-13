@@ -31,7 +31,7 @@ export function migrateRoutingDefaultActionsIfNeeded(db: Database): void {
     return;
   }
 
-  const checkAlreadyWide = ddl.includes("'block'");
+  const checkAlreadyWide = ddl.includes("('use_chain','direct','block')");
 
   if (!checkAlreadyWide) {
     db.exec("PRAGMA foreign_keys = OFF");

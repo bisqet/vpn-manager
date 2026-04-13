@@ -61,15 +61,34 @@ function createDbWithTwoValueCheck() {
   const chainId = Number(db.query("INSERT INTO chains (name) VALUES (?)").run("C").lastInsertRowid);
   const hop0 = Number(db.query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)").run(chainId, 0, vp).lastInsertRowid);
   const hop1 = Number(db.query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)").run(chainId, 1, vp2).lastInsertRowid);
-  db.query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)").run("p0", hop0, "use_chain");
-  db.query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)").run("p1", hop1, "use_chain");
+  const rp0 = Number(
+    db
+      .query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)")
+      .run("p0", hop0, "use_chain").lastInsertRowid,
+  );
+  const rp1 = Number(
+    db
+      .query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)")
+      .run("p1", hop1, "use_chain").lastInsertRowid,
+  );
+  db.query(
+    "INSERT INTO rules (routing_profile_id, position, match_kind, match_value, action) VALUES (?, ?, ?, ?, ?)",
+  ).run(rp0, 0, "domain", ".a", "direct");
+  db.query(
+    "INSERT INTO rules (routing_profile_id, position, match_kind, match_value, action) VALUES (?, ?, ?, ?, ?)",
+  ).run(rp1, 0, "domain", ".b", "block");
   return { db, hop0, hop1 };
 }
 
 test("widens CHECK, allows block, coerces terminal use_chain to direct", () => {
   const { db, hop0, hop1 } = createDbWithTwoValueCheck();
 
+  expect(db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM rules").get()).toEqual({ c: 2 });
+
   migrateRoutingDefaultActionsIfNeeded(db);
+
+  expect(db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM rules").get()).toEqual({ c: 2 });
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 
   const rows = db
     .query<{ chain_hop_id: number; default_action: string }, []>(
@@ -85,4 +104,17 @@ test("widens CHECK, allows block, coerces terminal use_chain to direct", () => {
   expect(
     db.query<{ default_action: string }, [number]>("SELECT default_action FROM routing_profiles WHERE chain_hop_id = ?").get(hop0),
   ).toEqual({ default_action: "block" });
+
+  migrateRoutingDefaultActionsIfNeeded(db);
+  expect(
+    db
+      .query<{ chain_hop_id: number; default_action: string }, []>(
+        "SELECT chain_hop_id, default_action FROM routing_profiles ORDER BY chain_hop_id ASC",
+      )
+      .all(),
+  ).toEqual([
+    { chain_hop_id: hop0, default_action: "block" },
+    { chain_hop_id: hop1, default_action: "direct" },
+  ]);
+  expect(db.query<{ c: number }, []>("SELECT COUNT(*) AS c FROM rules").get()).toEqual({ c: 2 });
 });
