@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, FormEvent, MutableRefObject } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
 
 const chainsQueryKey = ["chains"] as const;
@@ -95,6 +95,10 @@ function validateRoutingForm(
 ): { payload: RoutingPatchPayload } | { error: string } {
   if (options?.terminalHop && defaultAction === "use_chain") {
     return { error: "The last hop in a chain cannot default to use chain." };
+  }
+
+  if (options?.terminalHop && ruleRows.some((row) => row.action === "use_chain")) {
+    return { error: "The last hop in a chain cannot use use_chain on a rule." };
   }
 
   const rules = ruleRows.map((rule) => ({
@@ -216,9 +220,13 @@ export default function RoutingPage() {
     const nextDefaultAction =
       terminal && profile.defaultAction === "use_chain" ? "direct" : profile.defaultAction;
 
+    const rows = profileToRuleRows(profile, nextRuleKeyRef).map((row) =>
+      terminal && row.action === "use_chain" ? { ...row, action: "direct" as const } : row,
+    );
+
     setRoutingProfileId(profile.id);
     setDefaultAction(nextDefaultAction);
-    setRuleRows(profileToRuleRows(profile, nextRuleKeyRef));
+    setRuleRows(rows);
     setFormError(null);
   }, [routingProfileQuery.data, selectedChain, selectedChainHopId]);
 
@@ -230,15 +238,42 @@ export default function RoutingPage() {
     setDefaultAction("direct");
   }, [isTerminalHop, selectedChainHopId, selectedChain, defaultAction]);
 
+  useLayoutEffect(() => {
+    if (!isTerminalHop) {
+      return;
+    }
+
+    setRuleRows((current) => {
+      if (!current.some((row) => row.action === "use_chain")) {
+        return current;
+      }
+
+      return current.map((row) =>
+        row.action === "use_chain" ? { ...row, action: "direct" as const } : row,
+      );
+    });
+  }, [isTerminalHop, selectedChainHopId, selectedChain]);
+
   const saveMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: RoutingPatchPayload }) =>
       updateRoutingProfile(id, payload),
     onSuccess: async (profile) => {
       queryClient.setQueryData(routingProfileQueryKey(profile.chainHopId), profile);
       await queryClient.invalidateQueries({ queryKey: routingProfileQueryKey(profile.chainHopId) });
+      const chain = chains.find((c) => c.id === profile.chainId) ?? null;
+      const hop = chain?.hops.find((h) => h.id === profile.chainHopId) ?? null;
+      const terminal =
+        chain !== null &&
+        hop !== null &&
+        hop.id === chain.hops[chain.hops.length - 1]?.id;
+      const nextDefaultAction =
+        terminal && profile.defaultAction === "use_chain" ? "direct" : profile.defaultAction;
+      const rows = profileToRuleRows(profile, nextRuleKeyRef).map((row) =>
+        terminal && row.action === "use_chain" ? { ...row, action: "direct" as const } : row,
+      );
       setRoutingProfileId(profile.id);
-      setDefaultAction(profile.defaultAction);
-      setRuleRows(profileToRuleRows(profile, nextRuleKeyRef));
+      setDefaultAction(nextDefaultAction);
+      setRuleRows(rows);
       setSaveMessage("Routing rules saved.");
     },
   });
@@ -248,7 +283,7 @@ export default function RoutingPage() {
       key: nextRuleKeyRef.current++,
       matchKind: "domain",
       matchValue: "",
-      action: "use_chain",
+      action: isTerminalHop ? "direct" : "use_chain",
     };
   }
 
@@ -533,7 +568,7 @@ export default function RoutingPage() {
                               style={cellInputStyle}
                               value={row.action}
                             >
-                              <option value="use_chain">use_chain</option>
+                              {!isTerminalHop ? <option value="use_chain">use_chain</option> : null}
                               <option value="direct">direct</option>
                               <option value="block">block</option>
                             </select>
