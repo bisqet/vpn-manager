@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts",
-    "create-admin": "bun scripts/create-admin.ts"
+    "dev": "bun --env-file=.env --watch src/index.ts",
+    "start": "bun --env-file=.env src/index.ts",
+    "create-admin": "bun --env-file=.env scripts/create-admin.ts"
   },
   "dependencies": {
     "ip-address": "^10.1.0",

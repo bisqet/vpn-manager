@@ -6,9 +6,11 @@ dist/
 build/
 *.tsbuildinfo
 
-# Env / secrets
+# Env / secrets (keep *.example committed for local dev templates)
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # Local SQLite databases (dev / smoke tests)
 apps/server/data/
