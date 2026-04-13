@@ -5,9 +5,17 @@ import { ApiError, apiFetch } from "../api/client";
 
 const chainsQueryKey = ["chains"] as const;
 
+type ChainHop = {
+  id: number;
+  position: number;
+  vpnProfileId: number;
+  label: string;
+};
+
 type Chain = {
   id: number;
   name: string;
+  hops: ChainHop[];
 };
 
 type DefaultAction = "use_chain" | "direct";
@@ -26,6 +34,7 @@ type RoutingProfile = {
   id: number;
   name: string;
   chainId: number;
+  chainHopId: number;
   defaultAction: DefaultAction;
   rules: RoutingRule[];
 };
@@ -48,16 +57,16 @@ type RuleRow = {
   action: RuleAction;
 };
 
-function routingProfileQueryKey(chainId: number) {
-  return ["routing", "by-chain", chainId] as const;
+function routingProfileQueryKey(chainHopId: number) {
+  return ["routing", "by-hop", chainHopId] as const;
 }
 
 function fetchChains() {
   return apiFetch<Chain[]>("/api/chains");
 }
 
-function fetchRoutingProfile(chainId: number) {
-  return apiFetch<RoutingProfile>(`/api/routing/by-chain/${chainId}`);
+function fetchRoutingProfileByHop(chainHopId: number) {
+  return apiFetch<RoutingProfile>(`/api/routing/by-hop/${chainHopId}`);
 }
 
 function updateRoutingProfile(routingProfileId: number, payload: RoutingPatchPayload) {
@@ -119,6 +128,7 @@ function profileToRuleRows(profile: RoutingProfile, nextRuleKeyRef: MutableRefOb
 export default function RoutingPage() {
   const queryClient = useQueryClient();
   const nextRuleKeyRef = useRef(0);
+  const prevSelectedChainIdRef = useRef<number | null>(null);
 
   const chainsQuery = useQuery({
     queryKey: chainsQueryKey,
@@ -126,6 +136,7 @@ export default function RoutingPage() {
   });
 
   const [selectedChainId, setSelectedChainId] = useState<number | null>(null);
+  const [selectedChainHopId, setSelectedChainHopId] = useState<number | null>(null);
   const [routingProfileId, setRoutingProfileId] = useState<number | null>(null);
   const [defaultAction, setDefaultAction] = useState<DefaultAction>("use_chain");
   const [ruleRows, setRuleRows] = useState<RuleRow[]>([]);
@@ -142,6 +153,7 @@ export default function RoutingPage() {
 
     if (chains.length === 0) {
       setSelectedChainId(null);
+      setSelectedChainHopId(null);
       setRoutingProfileId(null);
       setDefaultAction("use_chain");
       setRuleRows([]);
@@ -157,10 +169,27 @@ export default function RoutingPage() {
     });
   }, [chains, chainsQuery.isSuccess]);
 
+  useEffect(() => {
+    if (prevSelectedChainIdRef.current === selectedChainId) {
+      return;
+    }
+    prevSelectedChainIdRef.current = selectedChainId;
+
+    if (selectedChainId === null) {
+      setSelectedChainHopId(null);
+      return;
+    }
+
+    const chain = chains.find((c) => c.id === selectedChainId);
+    const firstHop = chain?.hops[0];
+    setSelectedChainHopId(firstHop?.id ?? null);
+  }, [selectedChainId, chains]);
+
   const routingProfileQuery = useQuery({
-    queryKey: selectedChainId === null ? ["routing", "by-chain", "none"] : routingProfileQueryKey(selectedChainId),
-    queryFn: () => fetchRoutingProfile(selectedChainId!),
-    enabled: selectedChainId !== null,
+    queryKey:
+      selectedChainHopId === null ? (["routing", "by-hop", "none"] as const) : routingProfileQueryKey(selectedChainHopId),
+    queryFn: () => fetchRoutingProfileByHop(selectedChainHopId!),
+    enabled: selectedChainHopId !== null,
   });
 
   useEffect(() => {
@@ -178,8 +207,8 @@ export default function RoutingPage() {
     mutationFn: ({ id, payload }: { id: number; payload: RoutingPatchPayload }) =>
       updateRoutingProfile(id, payload),
     onSuccess: async (profile) => {
-      queryClient.setQueryData(routingProfileQueryKey(profile.chainId), profile);
-      await queryClient.invalidateQueries({ queryKey: routingProfileQueryKey(profile.chainId) });
+      queryClient.setQueryData(routingProfileQueryKey(profile.chainHopId), profile);
+      await queryClient.invalidateQueries({ queryKey: routingProfileQueryKey(profile.chainHopId) });
       setRoutingProfileId(profile.id);
       setDefaultAction(profile.defaultAction);
       setRuleRows(profileToRuleRows(profile, nextRuleKeyRef));
@@ -203,7 +232,20 @@ export default function RoutingPage() {
 
   function handleChainChange(chainId: string) {
     const nextChainId = Number(chainId);
-    setSelectedChainId(Number.isInteger(nextChainId) && nextChainId > 0 ? nextChainId : null);
+    const resolved =
+      Number.isInteger(nextChainId) && nextChainId > 0 ? nextChainId : null;
+    setSelectedChainId(resolved);
+    const chain = resolved !== null ? chains.find((c) => c.id === resolved) : null;
+    setSelectedChainHopId(chain?.hops[0]?.id ?? null);
+    setRoutingProfileId(null);
+    setDefaultAction("use_chain");
+    setRuleRows([]);
+    clearFeedback();
+  }
+
+  function handleHopChange(chainHopId: string) {
+    const nextHopId = Number(chainHopId);
+    setSelectedChainHopId(Number.isInteger(nextHopId) && nextHopId > 0 ? nextHopId : null);
     setRoutingProfileId(null);
     setDefaultAction("use_chain");
     setRuleRows([]);
@@ -247,7 +289,7 @@ export default function RoutingPage() {
     clearFeedback();
 
     if (routingProfileId === null) {
-      setFormError("Select a chain with a routing profile before saving.");
+      setFormError("Select a chain hop with a routing profile before saving.");
       return;
     }
 
@@ -273,11 +315,16 @@ export default function RoutingPage() {
           <div style={eyebrowStyle}>Routing</div>
           <h2 style={pageTitleStyle}>Routing rules editor</h2>
           <p style={helperTextStyle}>
-            Choose a chain, define its default handling, and add ordered domain or CIDR
-            overrides.
+            Choose a chain and hop, define default handling for that hop, and add ordered domain
+            or CIDR overrides.
           </p>
         </div>
-        <button disabled={isSaving || selectedChainId === null} onClick={handleAddRule} style={secondaryButtonStyle} type="button">
+        <button
+          disabled={isSaving || selectedChainHopId === null}
+          onClick={handleAddRule}
+          style={secondaryButtonStyle}
+          type="button"
+        >
           Add rule
         </button>
       </div>
@@ -288,7 +335,7 @@ export default function RoutingPage() {
         <div style={errorStyle}>{getErrorMessage(chainsQuery.error)}</div>
       ) : chains.length === 0 ? (
         <div style={emptyStateStyle}>
-          No chains available yet. Create a chain before editing routing rules.
+          No chains available yet. Create a chain with hops before editing routing rules.
         </div>
       ) : (
         <form onSubmit={(event) => void handleSubmit(event)} style={formStyle}>
@@ -307,18 +354,46 @@ export default function RoutingPage() {
             </select>
           </label>
 
+          {selectedChain && selectedChain.hops.length > 0 ? (
+            <label style={labelStyle}>
+              Hop
+              <select
+                onChange={(event) => handleHopChange(event.target.value)}
+                style={inputStyle}
+                value={selectedChainHopId === null ? "" : String(selectedChainHopId)}
+              >
+                {selectedChain.hops.map((hop) => (
+                  <option key={hop.id} value={String(hop.id)}>
+                    #{hop.position + 1} — {hop.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           {selectedChain ? (
             <div style={summaryCardStyle}>
               <div style={summaryLabelStyle}>Selected chain</div>
               <div style={summaryValueStyle}>{selectedChain.name}</div>
               <div style={summaryMetaStyle}>
-                {routingProfileQuery.data?.name ?? "Loading routing profile..."}
+                {selectedChainHopId === null
+                  ? selectedChain.hops.length === 0
+                    ? "This chain has no hops yet."
+                    : "Select a hop to load its routing profile."
+                  : (routingProfileQuery.data?.name ?? "Loading routing profile...")}
               </div>
             </div>
           ) : null}
 
-          {routingProfileQuery.isPending ? (
+          {selectedChain && selectedChain.hops.length === 0 ? (
+            <div style={emptyStateStyle}>
+              This chain has no hops yet. Add hops on the Chains page, then return here to edit
+              routing per hop.
+            </div>
+          ) : routingProfileQuery.isPending ? (
             <div style={emptyStateStyle}>Loading routing profile...</div>
+          ) : selectedChainHopId === null ? (
+            <div style={emptyStateStyle}>Select a hop to edit routing rules.</div>
           ) : routingProfileQuery.isError ? (
             <div style={errorStyle}>{getErrorMessage(routingProfileQuery.error)}</div>
           ) : (
@@ -462,7 +537,12 @@ export default function RoutingPage() {
 
           <div style={editorActionsStyle}>
             <button
-              disabled={isSaving || selectedChainId === null || routingProfileQuery.isPending}
+              disabled={
+                isSaving ||
+                selectedChainHopId === null ||
+                routingProfileQuery.isPending ||
+                routingProfileQuery.isError
+              }
               style={primaryButtonStyle}
               type="submit"
             >

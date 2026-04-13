@@ -72,7 +72,7 @@ async function downloadExport(chainId: number) {
   try {
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = "vpn-manager.routing.v1.json";
+    anchor.download = "vpn-manager.routing.v2.json";
     anchor.click();
   } finally {
     URL.revokeObjectURL(objectUrl);
