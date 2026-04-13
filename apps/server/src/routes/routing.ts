@@ -76,23 +76,17 @@ function isDefaultAction(value: unknown): value is DefaultAction {
 
 function isTerminalRoutingProfile(db: Database, routingProfileId: number): boolean {
   const row = db
-    .query<{ chain_id: number; position: number }, [number]>(
-      `SELECT ch.chain_id AS chain_id, ch.position AS position
+    .query<{ ok: number }, [number]>(
+      `SELECT 1 AS ok
        FROM routing_profiles rp
        JOIN chain_hops ch ON ch.id = rp.chain_hop_id
-       WHERE rp.id = ?`,
+       WHERE rp.id = ?
+         AND ch.position = (
+           SELECT MAX(mx.position) FROM chain_hops mx WHERE mx.chain_id = ch.chain_id
+         )`,
     )
     .get(routingProfileId);
-  if (!row) {
-    return false;
-  }
-  const maxRow = db
-    .query<{ m: number | null }, [number]>(
-      "SELECT MAX(position) AS m FROM chain_hops WHERE chain_id = ?",
-    )
-    .get(row.chain_id);
-  const maxPos = maxRow?.m;
-  return maxPos !== null && maxPos !== undefined && row.position === maxPos;
+  return row !== null && row !== undefined;
 }
 
 function isMatchKind(value: unknown): value is MatchKind {

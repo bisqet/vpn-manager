@@ -40,7 +40,7 @@ export function migrateRoutingDefaultActionsIfNeeded(db: Database): void {
       db.exec(`CREATE TABLE routing_profiles__wide (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        chain_hop_id INTEGER NOT NULL UNIQUE REFERENCES chain_hops(id) ON DELETE CASCADE,
+        chain_hop_id INTEGER NOT NULL REFERENCES chain_hops(id) ON DELETE CASCADE,
         default_action TEXT NOT NULL CHECK (default_action IN ('use_chain','direct','block'))
       );`);
       db.exec(`INSERT INTO routing_profiles__wide (id, name, default_action, chain_hop_id)
