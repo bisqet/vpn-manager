@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS routing_profiles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   chain_hop_id INTEGER NOT NULL UNIQUE REFERENCES chain_hops(id) ON DELETE CASCADE,
-  default_action TEXT NOT NULL CHECK (default_action IN ('use_chain','direct'))
+  default_action TEXT NOT NULL CHECK (default_action IN ('use_chain','direct','block'))
 );
 
 CREATE TABLE IF NOT EXISTS rules (

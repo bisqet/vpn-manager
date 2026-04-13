@@ -26,7 +26,7 @@ function rebuildRoutingProfilesWithoutChainId(db: Database): void {
   db.exec(`CREATE TABLE routing_profiles__migrated (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    default_action TEXT NOT NULL CHECK (default_action IN ('use_chain','direct')),
+    default_action TEXT NOT NULL CHECK (default_action IN ('use_chain','direct','block')),
     chain_hop_id INTEGER NOT NULL REFERENCES chain_hops(id) ON DELETE CASCADE
   );`);
   db.exec(`INSERT INTO routing_profiles__migrated (id, name, default_action, chain_hop_id)
