@@ -16,7 +16,7 @@ export type ExportV2 = {
     hopIndex: number;
     chainHopId: number;
     routingProfileId: number;
-    defaultAction: "use_chain" | "direct";
+    defaultAction: "use_chain" | "direct" | "block";
     rules: Array<{
       matchKind: "domain" | "cidr";
       matchValue: string;
@@ -33,7 +33,7 @@ type HopRow = {
   ssh_port: number;
   ssh_user: string;
   routing_profile_id: number | null;
-  default_action: "use_chain" | "direct" | null;
+  default_action: "use_chain" | "direct" | "block" | null;
 };
 
 type RuleRow = {

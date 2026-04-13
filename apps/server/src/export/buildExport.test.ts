@@ -76,6 +76,7 @@ describe("buildExportV2", () => {
         .query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)")
         .run("hop1", hop1Id, "direct").lastInsertRowid,
     );
+    db.query("UPDATE routing_profiles SET default_action = ? WHERE id = ?").run("block", routingProfile1);
 
     db.query(
       "INSERT INTO rules (routing_profile_id, position, match_kind, match_value, action) VALUES (?, ?, ?, ?, ?)",
@@ -134,7 +135,7 @@ describe("buildExportV2", () => {
           hopIndex: 1,
           chainHopId: hop1Id,
           routingProfileId: routingProfile1,
-          defaultAction: "direct",
+          defaultAction: "block",
           rules: [
             {
               matchKind: "domain",
