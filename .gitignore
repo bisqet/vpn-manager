@@ -13,6 +13,9 @@ build/
 # Brainstorming visual companion (if used)
 .superpowers/
 
+# Git worktrees (implementation isolation)
+.worktrees/
+
 # OS / editor
 .DS_Store
 Thumbs.db
