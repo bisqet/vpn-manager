@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { authQueryKey, fetchCurrentUser } from "./api/client";
+import ChainsPage from "./pages/ChainsPage";
 import LoginPage from "./pages/LoginPage";
 import VpnsPage from "./pages/VpnsPage";
 
@@ -19,7 +20,7 @@ export default function App() {
       <Route element={<ProtectedLayout />}>
         <Route index element={<Navigate to="/vpns" replace />} />
         <Route path="/vpns" element={<VpnsPage />} />
-        <Route path="/chains" element={<PlaceholderPage title="Chains" />} />
+        <Route path="/chains" element={<ChainsPage />} />
         <Route path="/routing" element={<PlaceholderPage title="Routing" />} />
         <Route path="/export" element={<PlaceholderPage title="Export" />} />
       </Route>
