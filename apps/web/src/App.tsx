@@ -4,6 +4,7 @@ import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { authQueryKey, fetchCurrentUser } from "./api/client";
 import ChainsPage from "./pages/ChainsPage";
 import LoginPage from "./pages/LoginPage";
+import RoutingPage from "./pages/RoutingPage";
 import VpnsPage from "./pages/VpnsPage";
 
 const navItems = [
@@ -21,7 +22,7 @@ export default function App() {
         <Route index element={<Navigate to="/vpns" replace />} />
         <Route path="/vpns" element={<VpnsPage />} />
         <Route path="/chains" element={<ChainsPage />} />
-        <Route path="/routing" element={<PlaceholderPage title="Routing" />} />
+        <Route path="/routing" element={<RoutingPage />} />
         <Route path="/export" element={<PlaceholderPage title="Export" />} />
       </Route>
       <Route path="*" element={<Navigate to="/vpns" replace />} />
