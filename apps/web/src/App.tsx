@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { authQueryKey, fetchCurrentUser } from "./api/client";
 import LoginPage from "./pages/LoginPage";
+import VpnsPage from "./pages/VpnsPage";
 
 const navItems = [
   { path: "/vpns", label: "VPNs" },
@@ -17,7 +18,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedLayout />}>
         <Route index element={<Navigate to="/vpns" replace />} />
-        <Route path="/vpns" element={<PlaceholderPage title="VPNs" />} />
+        <Route path="/vpns" element={<VpnsPage />} />
         <Route path="/chains" element={<PlaceholderPage title="Chains" />} />
         <Route path="/routing" element={<PlaceholderPage title="Routing" />} />
         <Route path="/export" element={<PlaceholderPage title="Export" />} />
