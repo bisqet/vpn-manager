@@ -10,6 +10,7 @@ import { requireAuth } from "./middleware/auth";
 import { authRoutes } from "./routes/auth";
 import { chainsRoutes } from "./routes/chains";
 import { profilesRoutes } from "./routes/profiles";
+import { routingRoutes } from "./routes/routing";
 
 // Dev note: set VPN_MANAGER_MASTER_KEY to the base64 of 32 random bytes before starting the server.
 export function createApp(db: Database, env: Pick<Env, "masterKey" | "staticDir">) {
@@ -30,6 +31,7 @@ export function createApp(db: Database, env: Pick<Env, "masterKey" | "staticDir"
   authed.use("*", requireAuth(db));
   authed.route("/profiles", profilesRoutes(db, env));
   authed.route("/chains", chainsRoutes(db));
+  authed.route("/routing", routingRoutes(db));
   api.route("/", authed);
 
   app.route("/api", api);
