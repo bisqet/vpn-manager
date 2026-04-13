@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { assertValidCidr } from "../rules/cidr";
 import { assertValidDomainRule, normalizeDomainSuffix } from "../rules/domain";
 
-type DefaultAction = "use_chain" | "direct";
+type DefaultAction = "use_chain" | "direct" | "block";
 type MatchKind = "domain" | "cidr";
 type RuleAction = "direct" | "use_chain" | "block";
 
@@ -71,7 +71,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isDefaultAction(value: unknown): value is DefaultAction {
-  return value === "use_chain" || value === "direct";
+  return value === "use_chain" || value === "direct" || value === "block";
+}
+
+function isTerminalRoutingProfile(db: Database, routingProfileId: number): boolean {
+  const row = db
+    .query<{ chain_id: number; position: number }, [number]>(
+      `SELECT ch.chain_id AS chain_id, ch.position AS position
+       FROM routing_profiles rp
+       JOIN chain_hops ch ON ch.id = rp.chain_hop_id
+       WHERE rp.id = ?`,
+    )
+    .get(routingProfileId);
+  if (!row) {
+    return false;
+  }
+  const maxRow = db
+    .query<{ m: number | null }, [number]>(
+      "SELECT MAX(position) AS m FROM chain_hops WHERE chain_id = ?",
+    )
+    .get(row.chain_id);
+  const maxPos = maxRow?.m;
+  return maxPos !== null && maxPos !== undefined && row.position === maxPos;
 }
 
 function isMatchKind(value: unknown): value is MatchKind {
@@ -236,6 +257,13 @@ export function routingRoutes(db: Database) {
     const parsed = validatePatchBody(body);
     if (!parsed.ok) {
       return c.json({ error: parsed.error }, 400);
+    }
+
+    if (parsed.value.defaultAction === "use_chain" && isTerminalRoutingProfile(db, routingProfileId)) {
+      return c.json(
+        { error: "Terminal hop cannot use defaultAction use_chain; use direct or block." },
+        400,
+      );
     }
 
     let normalizedRules: RoutingRuleInput[];

@@ -61,7 +61,10 @@ describe("routingRoutes", () => {
     return Number(result.lastInsertRowid);
   }
 
-  function seedRoutingProfileForHop(chainHopId: number, defaultAction: "use_chain" | "direct" = "use_chain") {
+  function seedRoutingProfileForHop(
+    chainHopId: number,
+    defaultAction: "use_chain" | "direct" | "block" = "use_chain",
+  ) {
     const result = db
       .query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)")
       .run(`hop ${chainHopId} routing`, chainHopId, defaultAction);
@@ -219,7 +222,7 @@ describe("routingRoutes", () => {
       method: "PATCH",
       headers: authHeaders(true),
       body: JSON.stringify({
-        defaultAction: "use_chain",
+        defaultAction: "direct",
         rules: [
           {
             matchKind: "domain",
@@ -247,7 +250,7 @@ describe("routingRoutes", () => {
       method: "PATCH",
       headers: authHeaders(true),
       body: JSON.stringify({
-        defaultAction: "use_chain",
+        defaultAction: "direct",
         rules: [
           {
             matchKind: "cidr",
@@ -262,5 +265,103 @@ describe("routingRoutes", () => {
     expect(await res.json()).toEqual({
       error: "CIDR must include a prefix length (e.g. 10.0.0.0/8 or 2001:db8::/32)",
     });
+  });
+
+  test("rejects use_chain defaultAction on terminal hop (two-hop chain)", async () => {
+    const app = createApp(db, env);
+    const vpnProfileId0 = seedVpnProfile();
+    const vpnProfileId1 = seedVpnProfile();
+    const chainId = seedChain();
+    const hop0 = seedHop(chainId, 0, vpnProfileId0);
+    const hop1 = seedHop(chainId, 1, vpnProfileId1);
+    seedRoutingProfileForHop(hop0);
+    const terminalRoutingProfileId = seedRoutingProfileForHop(hop1);
+
+    const res = await app.request(`/api/routing/${terminalRoutingProfileId}`, {
+      method: "PATCH",
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        defaultAction: "use_chain",
+        rules: [
+          {
+            matchKind: "domain",
+            matchValue: ".example.com",
+            action: "direct",
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Terminal hop cannot use defaultAction use_chain; use direct or block.",
+    });
+  });
+
+  test("allows block defaultAction on terminal hop with valid rules", async () => {
+    const app = createApp(db, env);
+    const vpnProfileId0 = seedVpnProfile();
+    const vpnProfileId1 = seedVpnProfile();
+    const chainId = seedChain();
+    const hop0 = seedHop(chainId, 0, vpnProfileId0);
+    const hop1 = seedHop(chainId, 1, vpnProfileId1);
+    seedRoutingProfileForHop(hop0);
+    const terminalRoutingProfileId = seedRoutingProfileForHop(hop1);
+
+    const res = await app.request(`/api/routing/${terminalRoutingProfileId}`, {
+      method: "PATCH",
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        defaultAction: "block",
+        rules: [
+          {
+            matchKind: "domain",
+            matchValue: ".example.com",
+            action: "direct",
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { defaultAction: string };
+    expect(body.defaultAction).toBe("block");
+    expect(
+      db
+        .query<{ default_action: string }, [number]>(
+          "SELECT default_action FROM routing_profiles WHERE id = ?",
+        )
+        .get(terminalRoutingProfileId),
+    ).toEqual({ default_action: "block" });
+  });
+
+  test("allows use_chain defaultAction on non-terminal hop", async () => {
+    const app = createApp(db, env);
+    const vpnProfileId0 = seedVpnProfile();
+    const vpnProfileId1 = seedVpnProfile();
+    const chainId = seedChain();
+    const hop0 = seedHop(chainId, 0, vpnProfileId0);
+    const hop1 = seedHop(chainId, 1, vpnProfileId1);
+    const firstHopRoutingProfileId = seedRoutingProfileForHop(hop0);
+    seedRoutingProfileForHop(hop1);
+
+    const res = await app.request(`/api/routing/${firstHopRoutingProfileId}`, {
+      method: "PATCH",
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        defaultAction: "use_chain",
+        rules: [
+          {
+            matchKind: "domain",
+            matchValue: ".example.com",
+            action: "direct",
+          },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { defaultAction: string };
+    expect(body.defaultAction).toBe("use_chain");
   });
 });
