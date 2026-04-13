@@ -10,6 +10,10 @@ build/
 .env
 .env.*
 
+# Local SQLite databases (dev / smoke tests)
+apps/server/data/
+data/
+
 # Brainstorming visual companion (if used)
 .superpowers/
 

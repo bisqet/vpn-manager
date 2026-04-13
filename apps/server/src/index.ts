@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import { loadEnv } from "./env";
 import { requireAuth } from "./middleware/auth";
 import { authRoutes } from "./routes/auth";
+import { chainsRoutes } from "./routes/chains";
 import { profilesRoutes } from "./routes/profiles";
 
 // Dev note: set VPN_MANAGER_MASTER_KEY to the base64 of 32 random bytes before starting the server.
@@ -28,6 +29,7 @@ export function createApp(db: Database, env: Pick<Env, "masterKey" | "staticDir"
   const authed = new Hono();
   authed.use("*", requireAuth(db));
   authed.route("/profiles", profilesRoutes(db, env));
+  authed.route("/chains", chainsRoutes(db));
   api.route("/", authed);
 
   app.route("/api", api);
