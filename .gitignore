@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+
+# Brainstorming visual companion (if used)
+.superpowers/
+
+# OS / editor
+.DS_Store
+Thumbs.db
