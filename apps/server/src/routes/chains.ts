@@ -271,10 +271,12 @@ function insertRoutingProfilesForHops(db: Database, chainId: number, chainName: 
     if (!hopRow) {
       throw new Error("Expected chain_hops row after insert");
     }
+    const isTerminalHop = position === hopCount - 1;
+    const defaultAction = isTerminalHop ? "direct" : "use_chain";
     db.query("INSERT INTO routing_profiles (name, chain_hop_id, default_action) VALUES (?, ?, ?)").run(
       routingProfileNameForHop(chainName, position),
       hopRow.id,
-      "use_chain",
+      defaultAction,
     );
   }
 }

@@ -126,7 +126,7 @@ describe("chainsRoutes", () => {
         id: 2,
         name: "Primary chain hop 1",
         chain_hop_id: 2,
-        default_action: "use_chain",
+        default_action: "direct",
       },
     ]);
 
@@ -196,7 +196,7 @@ describe("chainsRoutes", () => {
         id: 4,
         name: "Updated chain hop 1",
         chain_hop_id: 4,
-        default_action: "use_chain",
+        default_action: "direct",
       },
     ]);
 
@@ -212,6 +212,42 @@ describe("chainsRoutes", () => {
     expect(db.query("SELECT id FROM chains WHERE id = ?").get(1)).toBeNull();
     expect(db.query("SELECT id FROM chain_hops WHERE chain_id = ?").get(1)).toBeNull();
     expect(db.query("SELECT id FROM routing_profiles").all()).toEqual([]);
+  });
+
+  test("single-hop chain creates one routing profile with default_action direct", async () => {
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+
+    expect(createRes.status).toBe(201);
+
+    const routingProfiles = db
+      .query<RoutingProfileRow, [number]>(
+        `SELECT rp.id, rp.name, rp.chain_hop_id, rp.default_action
+         FROM routing_profiles rp
+         JOIN chain_hops ch ON ch.id = rp.chain_hop_id
+         WHERE ch.chain_id = ?`,
+      )
+      .all(1);
+    expect(routingProfiles).toEqual([
+      {
+        id: 1,
+        name: "Single hop hop 0",
+        chain_hop_id: 1,
+        default_action: "direct",
+      },
+    ]);
   });
 
   test("downloads a chain export as json", async () => {
@@ -300,7 +336,7 @@ describe("chainsRoutes", () => {
           hopIndex: 1,
           chainHopId: hopRows[1]!.id,
           routingProfileId: 2,
-          defaultAction: "use_chain",
+          defaultAction: "direct",
           rules: [],
         },
       ],
