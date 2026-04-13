@@ -18,7 +18,7 @@ type Chain = {
   hops: ChainHop[];
 };
 
-type DefaultAction = "use_chain" | "direct";
+type DefaultAction = "use_chain" | "direct" | "block";
 type MatchKind = "domain" | "cidr";
 type RuleAction = "direct" | "use_chain" | "block";
 
@@ -91,7 +91,12 @@ function getErrorMessage(error: unknown) {
 function validateRoutingForm(
   defaultAction: DefaultAction,
   ruleRows: RuleRow[],
+  options?: { terminalHop?: boolean },
 ): { payload: RoutingPatchPayload } | { error: string } {
+  if (options?.terminalHop && defaultAction === "use_chain") {
+    return { error: "The last hop in a chain cannot default to use chain." };
+  }
+
   const rules = ruleRows.map((rule) => ({
     matchKind: rule.matchKind,
     matchValue: rule.matchValue.trim(),
@@ -145,6 +150,11 @@ export default function RoutingPage() {
 
   const chains = chainsQuery.data ?? [];
   const selectedChain = chains.find((chain) => chain.id === selectedChainId) ?? null;
+  const selectedHop = selectedChain?.hops.find((h) => h.id === selectedChainHopId) ?? null;
+  const isTerminalHop =
+    selectedChain !== null &&
+    selectedHop !== null &&
+    selectedHop.id === selectedChain.hops[selectedChain.hops.length - 1]?.id;
 
   useEffect(() => {
     if (!chainsQuery.isSuccess) {
@@ -197,11 +207,28 @@ export default function RoutingPage() {
       return;
     }
 
-    setRoutingProfileId(routingProfileQuery.data.id);
-    setDefaultAction(routingProfileQuery.data.defaultAction);
-    setRuleRows(profileToRuleRows(routingProfileQuery.data, nextRuleKeyRef));
+    const profile = routingProfileQuery.data;
+    const hop = selectedChain?.hops.find((h) => h.id === selectedChainHopId) ?? null;
+    const terminal =
+      selectedChain !== null &&
+      hop !== null &&
+      hop.id === selectedChain.hops[selectedChain.hops.length - 1]?.id;
+    const nextDefaultAction =
+      terminal && profile.defaultAction === "use_chain" ? "direct" : profile.defaultAction;
+
+    setRoutingProfileId(profile.id);
+    setDefaultAction(nextDefaultAction);
+    setRuleRows(profileToRuleRows(profile, nextRuleKeyRef));
     setFormError(null);
-  }, [routingProfileQuery.data]);
+  }, [routingProfileQuery.data, selectedChain, selectedChainHopId]);
+
+  useEffect(() => {
+    if (!isTerminalHop || defaultAction !== "use_chain") {
+      return;
+    }
+
+    setDefaultAction("direct");
+  }, [isTerminalHop, selectedChainHopId, selectedChain, defaultAction]);
 
   const saveMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: RoutingPatchPayload }) =>
@@ -293,7 +320,9 @@ export default function RoutingPage() {
       return;
     }
 
-    const result = validateRoutingForm(defaultAction, ruleRows);
+    const result = validateRoutingForm(defaultAction, ruleRows, {
+      terminalHop: isTerminalHop,
+    });
     if (hasValidationError(result)) {
       setFormError(result.error);
       return;
@@ -401,18 +430,20 @@ export default function RoutingPage() {
               <fieldset style={fieldsetStyle}>
                 <legend style={legendStyle}>Default action</legend>
                 <div style={radioRowStyle}>
-                  <label style={radioLabelStyle}>
-                    <input
-                      checked={defaultAction === "use_chain"}
-                      name="defaultAction"
-                      onChange={() => {
-                        setDefaultAction("use_chain");
-                        clearFeedback();
-                      }}
-                      type="radio"
-                    />
-                    Use chain
-                  </label>
+                  {!isTerminalHop ? (
+                    <label style={radioLabelStyle}>
+                      <input
+                        checked={defaultAction === "use_chain"}
+                        name="defaultAction"
+                        onChange={() => {
+                          setDefaultAction("use_chain");
+                          clearFeedback();
+                        }}
+                        type="radio"
+                      />
+                      Use chain
+                    </label>
+                  ) : null}
                   <label style={radioLabelStyle}>
                     <input
                       checked={defaultAction === "direct"}
@@ -424,6 +455,18 @@ export default function RoutingPage() {
                       type="radio"
                     />
                     Direct
+                  </label>
+                  <label style={radioLabelStyle}>
+                    <input
+                      checked={defaultAction === "block"}
+                      name="defaultAction"
+                      onChange={() => {
+                        setDefaultAction("block");
+                        clearFeedback();
+                      }}
+                      type="radio"
+                    />
+                    Block
                   </label>
                 </div>
               </fieldset>
