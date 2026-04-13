@@ -374,23 +374,13 @@ export default function RoutingPage() {
 
   return (
     <section style={cardStyle}>
-      <div style={headerRowStyle}>
-        <div>
-          <div style={eyebrowStyle}>Routing</div>
-          <h2 style={pageTitleStyle}>Routing rules editor</h2>
-          <p style={helperTextStyle}>
-            Choose a chain and hop, define default handling for that hop, and add ordered domain
-            or CIDR overrides.
-          </p>
-        </div>
-        <button
-          disabled={isSaving || selectedChainHopId === null}
-          onClick={handleAddRule}
-          style={secondaryButtonStyle}
-          type="button"
-        >
-          Add rule
-        </button>
+      <div style={pageHeaderStyle}>
+        <div style={eyebrowStyle}>Routing</div>
+        <h2 style={pageTitleStyle}>Routing rules editor</h2>
+        <p style={helperTextStyle}>
+          Choose a chain and hop, define default handling for that hop, and add ordered domain or
+          CIDR overrides.
+        </p>
       </div>
 
       {chainsQuery.isPending ? (
@@ -615,6 +605,14 @@ export default function RoutingPage() {
 
           <div style={editorActionsStyle}>
             <button
+              disabled={isSaving || selectedChainHopId === null}
+              onClick={handleAddRule}
+              style={secondaryButtonStyle}
+              type="button"
+            >
+              Add rule
+            </button>
+            <button
               disabled={
                 isSaving ||
                 selectedChainHopId === null ||
@@ -640,11 +638,8 @@ const cardStyle: CSSProperties = {
   boxShadow: "0 16px 40px rgba(15, 23, 42, 0.08)",
 };
 
-const headerRowStyle: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: "16px",
+const pageHeaderStyle: CSSProperties = {
+  marginBottom: "8px",
 };
 
 const pageTitleStyle: CSSProperties = {
@@ -825,7 +820,10 @@ const dangerButtonStyle: CSSProperties = {
 
 const editorActionsStyle: CSSProperties = {
   display: "flex",
-  justifyContent: "flex-end",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "12px",
+  marginTop: "16px",
 };
 
 const emptyStateStyle: CSSProperties = {
