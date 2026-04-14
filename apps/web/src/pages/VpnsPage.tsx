@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CSSProperties, FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, FormEvent, KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
 
 const profilesQueryKey = ["profiles"] as const;
@@ -11,6 +11,7 @@ type VpnProfile = {
   host: string;
   sshPort: number;
   sshUser: string;
+  operationalStatus: "pending" | "working";
   createdAt: string;
   updatedAt: string;
 };
@@ -72,6 +73,12 @@ function updateProfile(
 function deleteProfile(id: number) {
   return apiFetch<{ ok: true }>(`/api/profiles/${id}`, {
     method: "DELETE",
+  });
+}
+
+function setupProfile(id: number) {
+  return apiFetch<VpnProfile>(`/api/profiles/${id}/setup`, {
+    method: "POST",
   });
 }
 
@@ -137,6 +144,100 @@ function hasValidationError(
   return "error" in result;
 }
 
+type SshTerminalSheetProps = {
+  profile: VpnProfile;
+  onClose: () => void;
+};
+
+function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
+  const titleId = "ssh-sheet-title";
+  const prompt = `${profile.sshUser}@${profile.host}:~$ `;
+  const [lines, setLines] = useState<string[]>([
+    "# Not a real SSH session — demo only. Type commands for your own notes.",
+    "# Manual server prep — paste commands here (not executed).",
+  ]);
+  const [currentLine, setCurrentLine] = useState("");
+  const terminalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    terminalRef.current?.focus();
+  }, [profile.id]);
+
+  function handleTerminalKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      setLines((prev) => [...prev, `${prompt}${currentLine}`]);
+      setCurrentLine("");
+      return;
+    }
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      setCurrentLine((c) => c.slice(0, -1));
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      setCurrentLine((c) => c + e.key);
+    }
+  }
+
+  return (
+    <div style={sshBackdropStyle} role="presentation" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={sshSheetStyle}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={sshSheetHeaderStyle}>
+          <h3 id={titleId} style={sshSheetTitleStyle}>
+            SSH — {profile.label}
+          </h3>
+          <button onClick={onClose} style={modalCloseButtonStyle} type="button">
+            Close
+          </button>
+        </div>
+        <div
+          ref={terminalRef}
+          tabIndex={0}
+          style={sshTerminalStyle}
+          onKeyDown={handleTerminalKeyDown}
+        >
+          {lines.map((line, i) => (
+            <div key={i} style={sshTerminalLineStyle}>
+              {line}
+            </div>
+          ))}
+          <div style={sshTerminalLineStyle}>
+            <span style={sshPromptStyle}>{prompt}</span>
+            <span>{currentLine}</span>
+            <span style={sshCaretStyle}>▍</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function VpnsPage() {
   const queryClient = useQueryClient();
   const profilesQuery = useQuery({
@@ -147,6 +248,8 @@ export default function VpnsPage() {
   const [modalState, setModalState] = useState<ModalState>(null);
   const [formValues, setFormValues] = useState<ProfileFormValues>(emptyFormValues);
   const [formError, setFormError] = useState<string | null>(null);
+  const [setupActionError, setSetupActionError] = useState<string | null>(null);
+  const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
 
   useEffect(() => {
     setFormValues(getInitialValues(modalState));
@@ -172,6 +275,14 @@ export default function VpnsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteProfile,
+    onSuccess: async (_, deletedId) => {
+      await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+      setSshProfile((current) => (current?.id === deletedId ? null : current));
+    },
+  });
+
+  const setupMutation = useMutation({
+    mutationFn: setupProfile,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
     },
@@ -227,6 +338,15 @@ export default function VpnsPage() {
     await deleteMutation.mutateAsync(profile.id);
   }
 
+  async function handleSetup(profile: VpnProfile) {
+    setSetupActionError(null);
+    try {
+      await setupMutation.mutateAsync(profile.id);
+    } catch (error) {
+      setSetupActionError(getErrorMessage(error));
+    }
+  }
+
   const profiles = profilesQuery.data ?? [];
   const modalTitle = modalState?.mode === "edit" ? "Edit VPN profile" : "Add VPN profile";
   const saveLabel =
@@ -255,6 +375,7 @@ export default function VpnsPage() {
         </div>
 
         {mutationError ? <div style={errorStyle}>{getErrorMessage(mutationError)}</div> : null}
+        {setupActionError ? <div style={errorStyle}>{setupActionError}</div> : null}
 
         {profilesQuery.isPending ? (
           <div style={emptyStateStyle}>Loading profiles...</div>
@@ -271,6 +392,7 @@ export default function VpnsPage() {
                   <th style={tableHeadCellStyle}>Host</th>
                   <th style={tableHeadCellStyle}>SSH port</th>
                   <th style={tableHeadCellStyle}>User</th>
+                  <th style={tableHeadCellStyle}>Status</th>
                   <th style={tableHeadCellStyle}>Actions</th>
                 </tr>
               </thead>
@@ -280,6 +402,7 @@ export default function VpnsPage() {
                   const editDisabled =
                     isSaving ||
                     (isDeleting && deleteMutation.variables !== undefined && deleteMutation.variables === profile.id);
+                  const setupBusy = setupMutation.isPending && setupMutation.variables === profile.id;
 
                   return (
                     <tr key={profile.id}>
@@ -288,7 +411,32 @@ export default function VpnsPage() {
                       <td style={tableBodyCellStyle}>{profile.sshPort}</td>
                       <td style={tableBodyCellStyle}>{profile.sshUser}</td>
                       <td style={tableBodyCellStyle}>
+                        {profile.operationalStatus === "working" ? (
+                          <span style={statusWorkingStyle}>Working</span>
+                        ) : (
+                          <span style={statusPendingStyle}>Pending</span>
+                        )}
+                      </td>
+                      <td style={tableBodyCellStyle}>
                         <div style={actionRowStyle}>
+                          {profile.operationalStatus === "pending" ? (
+                            <button
+                              disabled={editDisabled || setupBusy}
+                              onClick={() => void handleSetup(profile)}
+                              style={primaryButtonStyle}
+                              type="button"
+                            >
+                              {setupBusy ? "Setting up..." : "Setup"}
+                            </button>
+                          ) : null}
+                          <button
+                            disabled={editDisabled}
+                            onClick={() => setSshProfile(profile)}
+                            style={secondaryButtonStyle}
+                            type="button"
+                          >
+                            SSH
+                          </button>
                           <button
                             disabled={editDisabled}
                             onClick={() => setModalState({ mode: "edit", profile })}
@@ -410,6 +558,8 @@ export default function VpnsPage() {
           </section>
         </div>
       ) : null}
+
+      {sshProfile ? <SshTerminalSheet profile={sshProfile} onClose={() => setSshProfile(null)} /> : null}
     </>
   );
 }
@@ -478,7 +628,92 @@ const tableBodyCellStyle: CSSProperties = {
 
 const actionRowStyle: CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   gap: "8px",
+};
+
+const statusPendingStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "4px 10px",
+  borderRadius: "999px",
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+  background: "#fef3c7",
+  color: "#92400e",
+};
+
+const statusWorkingStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "4px 10px",
+  borderRadius: "999px",
+  fontSize: "0.8125rem",
+  fontWeight: 600,
+  background: "#d1fae5",
+  color: "#065f46",
+};
+
+const sshBackdropStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 50,
+  background: "rgba(17, 24, 39, 0.45)",
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "center",
+};
+
+const sshSheetStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: "960px",
+  height: "50vh",
+  maxHeight: "560px",
+  background: "#ffffff",
+  borderTopLeftRadius: "16px",
+  borderTopRightRadius: "16px",
+  boxShadow: "0 -12px 40px rgba(15, 23, 42, 0.18)",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+
+const sshSheetHeaderStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "12px",
+  padding: "16px 20px",
+  borderBottom: "1px solid #e5e7eb",
+};
+
+const sshSheetTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "1.125rem",
+  color: "#111827",
+};
+
+const sshTerminalStyle: CSSProperties = {
+  flex: 1,
+  overflow: "auto",
+  padding: "16px 20px",
+  background: "#0f172a",
+  color: "#e2e8f0",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize: "0.875rem",
+  lineHeight: 1.5,
+  outline: "none",
+};
+
+const sshTerminalLineStyle: CSSProperties = {
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+};
+
+const sshPromptStyle: CSSProperties = {
+  color: "#38bdf8",
+};
+
+const sshCaretStyle: CSSProperties = {
+  color: "#94a3b8",
 };
 
 const formStyle: CSSProperties = {
