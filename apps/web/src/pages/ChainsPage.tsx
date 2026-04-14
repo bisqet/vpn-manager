@@ -18,6 +18,7 @@ type VpnProfile = {
   host: string;
   sshPort: number;
   sshUser: string;
+  operationalStatus: "pending" | "working";
   createdAt: string;
   updatedAt: string;
 };
