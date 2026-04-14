@@ -5,6 +5,7 @@ import { ApiError, apiFetch } from "../api/client";
 import { ChainTrafficDiagram } from "../components/ChainTrafficDiagram";
 import type { ChainHopInput, RoutingProfileInput } from "../chainTrafficGraph";
 import { chainRailStyle, chainsPageRootStackStyle } from "../chainsPageLayout";
+import { trafficDiagramKey } from "../trafficDiagramKey";
 
 const chainsQueryKey = ["chains"] as const;
 const profilesQueryKey = ["profiles"] as const;
@@ -156,6 +157,10 @@ export default function ChainsPage() {
   const nextHopKeyRef = useRef(0);
   const diagramContainerRef = useRef<HTMLDivElement>(null);
   const [diagramWidth, setDiagramWidth] = useState(0);
+  const [diagramModalOpen, setDiagramModalOpen] = useState(false);
+  const modalDiagramContainerRef = useRef<HTMLDivElement>(null);
+  const [modalDiagramWidth, setModalDiagramWidth] = useState(0);
+  const modalCloseButtonRef = useRef<HTMLButtonElement>(null);
 
   function chainHopRowsFromChain(chain: Chain): HopRow[] {
     if (chain.hops.length > 0) {
@@ -313,6 +318,20 @@ export default function ChainsPage() {
       .filter((label): label is string => Boolean(label));
   }, [hopRows, isCreateMode, profiles]);
 
+  const trafficDiagramKeyValue = useMemo(() => {
+    if (editorState.mode === "create") {
+      return trafficDiagramKey({
+        mode: "create",
+        draftVpnProfileIdsInOrder: hopRows.map((row) => row.vpnProfileId),
+      });
+    }
+    return trafficDiagramKey({
+      mode: "edit",
+      chainId: editorState.chainId,
+      hopIdsInOrder: sortedHopsForDiagram.map((h) => h.id),
+    });
+  }, [editorState, hopRows, sortedHopsForDiagram]);
+
   useLayoutEffect(() => {
     const element = diagramContainerRef.current;
     if (!element) {
@@ -328,6 +347,41 @@ export default function ChainsPage() {
 
     return () => observer.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    if (!diagramModalOpen) {
+      return;
+    }
+    const el = modalDiagramContainerRef.current;
+    if (!el) {
+      return;
+    }
+    const ro = new ResizeObserver(() => {
+      setModalDiagramWidth(el.getBoundingClientRect().width);
+    });
+    ro.observe(el);
+    setModalDiagramWidth(el.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, [diagramModalOpen]);
+
+  useEffect(() => {
+    if (!diagramModalOpen) {
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDiagramModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [diagramModalOpen]);
+
+  useEffect(() => {
+    if (diagramModalOpen) {
+      modalCloseButtonRef.current?.focus();
+    }
+  }, [diagramModalOpen]);
 
   function makeHopRow() {
     return {
@@ -639,13 +693,39 @@ export default function ChainsPage() {
       </section>
 
       <section style={cardStyle}>
-        <h3 style={sectionTitleStyle}>Traffic diagram</h3>
+        <div style={sectionHeaderStyle}>
+          <h3 style={{ ...sectionTitleStyle, margin: 0 }}>Traffic diagram</h3>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={diagramModalOpen}
+              aria-label="Expand diagram"
+              onClick={() => setDiagramModalOpen(true)}
+              style={ghostButtonStyle}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                style={{ display: "block" }}
+              >
+                <path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" />
+              </svg>
+            </button>
+          </div>
+        </div>
         <p style={helperTextStyle}>
           VPN hop order and per-hop routing. Edit routing rules on the Routing page.
         </p>
         <div ref={diagramContainerRef} style={diagramMeasureStyle}>
           {diagramWidth > 0 ? (
             <ChainTrafficDiagram
+              diagramKey={trafficDiagramKeyValue}
               draftLabels={draftDiagramLabels}
               hops={isCreateMode ? [] : sortedHopsForDiagram}
               routingByChainHopId={routingByChainHopId}
@@ -656,6 +736,75 @@ export default function ChainsPage() {
           ) : null}
         </div>
       </section>
+
+      {diagramModalOpen ? (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="traffic-diagram-dialog-title"
+            style={{
+              width: "min(96vw, 1100px)",
+              maxHeight: "90vh",
+              overflow: "auto",
+              borderRadius: "16px",
+              background: "#ffffff",
+              boxShadow: "0 24px 64px rgba(15, 23, 42, 0.2)",
+              padding: "20px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "12px",
+              }}
+            >
+              <h3
+                id="traffic-diagram-dialog-title"
+                style={{ ...sectionTitleStyle, margin: 0 }}
+              >
+                Traffic diagram
+              </h3>
+              <button
+                ref={modalCloseButtonRef}
+                type="button"
+                aria-label="Close diagram"
+                onClick={() => setDiagramModalOpen(false)}
+                style={ghostButtonStyle}
+              >
+                Close
+              </button>
+            </div>
+            <div ref={modalDiagramContainerRef} style={{ width: "100%", minHeight: 240 }}>
+              {modalDiagramWidth > 0 ? (
+                <ChainTrafficDiagram
+                  diagramKey={trafficDiagramKeyValue}
+                  draftLabels={draftDiagramLabels}
+                  hops={isCreateMode ? [] : sortedHopsForDiagram}
+                  routingByChainHopId={routingByChainHopId}
+                  routingFailedChainHopIds={routingFailedChainHopIds}
+                  routingLoading={routingLoading}
+                  width={modalDiagramWidth}
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

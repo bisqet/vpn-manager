@@ -1,5 +1,5 @@
 import * as d3 from "d3";
-import { useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 import {
   buildChainRoutingGraph,
@@ -9,6 +9,7 @@ import {
 } from "../chainTrafficGraph";
 
 export type ChainTrafficDiagramProps = {
+  diagramKey: string;
   width: number;
   hops: ChainHopInput[];
   routingByChainHopId: Map<number, RoutingProfileInput>;
@@ -104,6 +105,7 @@ function strokeForVariant(v: string): string {
 }
 
 export function ChainTrafficDiagram({
+  diagramKey,
   width,
   hops,
   routingByChainHopId,
@@ -112,11 +114,31 @@ export function ChainTrafficDiagram({
   draftLabels,
 }: ChainTrafficDiagramProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
+  const prevDiagramKeyRef = useRef<string | null>(null);
+  const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+
+  const handleResetView = useCallback(() => {
+    const svgEl = svgRef.current;
+    const zoom = zoomBehaviorRef.current;
+    if (!svgEl || !zoom) {
+      transformRef.current = d3.zoomIdentity;
+      return;
+    }
+    const svg = d3.select(svgEl);
+    transformRef.current = d3.zoomIdentity;
+    svg.call(zoom.transform, d3.zoomIdentity);
+  }, []);
 
   useLayoutEffect(() => {
     const svgEl = svgRef.current;
     if (!svgEl || width <= 0) {
       return;
+    }
+
+    if (prevDiagramKeyRef.current !== diagramKey) {
+      prevDiagramKeyRef.current = diagramKey;
+      transformRef.current = d3.zoomIdentity;
     }
 
     const sortedHops = [...hops].sort((a, b) => a.position - b.position);
@@ -127,32 +149,30 @@ export function ChainTrafficDiagram({
 
     const svg = d3.select(svgEl);
     svg.selectAll("*").remove();
+    const zoomRoot = svg.append("g").attr("class", "chain-traffic-zoom-root");
 
     if (!graph && (!draftLabels || draftLabels.length === 0)) {
-      const g0 = svg.append("g");
-      g0
+      zoomRoot
         .append("text")
         .attr("x", 12)
         .attr("y", 24)
         .attr("fill", COLORS.muted)
         .attr("font-size", 13)
         .text("Add hops to see traffic flow.");
-      return;
-    }
-
-    if (!graph && draftLabels && draftLabels.length > 0) {
+    } else if (!graph && draftLabels && draftLabels.length > 0) {
       const padding = 20;
       const colW = Math.min(150, (width - 2 * padding) / Math.max(draftLabels.length + 1, 1));
       const hopY = 72;
       const height = 200;
       svg.attr("viewBox", `0 0 ${width} ${height}`);
-      const g = svg.append("g");
-      g.append("circle")
+      zoomRoot
+        .append("circle")
         .attr("cx", padding + colW * 0.5)
         .attr("cy", hopY)
         .attr("r", 10)
         .attr("fill", COLORS.backbone);
-      g.append("text")
+      zoomRoot
+        .append("text")
         .attr("x", padding + colW * 0.5)
         .attr("y", hopY + 4)
         .attr("text-anchor", "middle")
@@ -161,7 +181,8 @@ export function ChainTrafficDiagram({
         .text("Entry");
       draftLabels.forEach((label, i) => {
         const x = padding + colW * (i + 1.5);
-        g.append("rect")
+        zoomRoot
+          .append("rect")
           .attr("x", x - 52)
           .attr("y", hopY - 18)
           .attr("width", 104)
@@ -169,7 +190,8 @@ export function ChainTrafficDiagram({
           .attr("rx", 8)
           .attr("fill", "#f9fafb")
           .attr("stroke", "#e5e7eb");
-        g.append("text")
+        zoomRoot
+          .append("text")
           .attr("x", x)
           .attr("y", hopY + 4)
           .attr("text-anchor", "middle")
@@ -184,220 +206,227 @@ export function ChainTrafficDiagram({
           [prevX, hopY],
           [x, hopY],
         ]);
-        g.append("path")
+        zoomRoot
+          .append("path")
           .attr("d", seg ?? "")
           .attr("fill", "none")
           .attr("stroke", COLORS.backbone)
           .attr("stroke-width", 2);
       });
-      g.append("text")
+      zoomRoot
+        .append("text")
         .attr("x", 12)
         .attr("y", 160)
         .attr("fill", COLORS.muted)
         .attr("font-size", 12)
         .text("Save the chain to load per-hop routing on this diagram.");
-      return;
-    }
+    } else if (graph) {
+      const { positions, height } = layoutNodes(graph, width);
+      svg.attr("viewBox", `0 0 ${width} ${height}`);
 
-    if (!graph) {
-      return;
-    }
+      const linkGroup = zoomRoot.append("g").attr("class", "links");
+      const nodeGroup = zoomRoot.append("g").attr("class", "nodes");
 
-    const { positions, height } = layoutNodes(graph, width);
-    svg.attr("viewBox", `0 0 ${width} ${height}`);
+      const line = d3
+        .line<[number, number]>()
+        .curve(d3.curveBumpX)
+        .x((d) => d[0])
+        .y((d) => d[1]);
 
-    const gRoot = svg.append("g");
-
-    const linkGroup = gRoot.append("g").attr("class", "links");
-    const nodeGroup = gRoot.append("g").attr("class", "nodes");
-
-    const line = d3
-      .line<[number, number]>()
-      .curve(d3.curveBumpX)
-      .x((d) => d[0])
-      .y((d) => d[1]);
-
-    graph.links.forEach((link, linkIndex) => {
-      const s = positions.get(link.sourceId);
-      const t = positions.get(link.targetId);
-      if (!s || !t) {
-        return;
-      }
-      const midY =
-        link.variant === "backbone"
-          ? s.y
-          : s.y + 18 + (linkIndex % 6) * 7;
-      const pathData: [number, number][] =
-        link.variant === "backbone"
-          ? [
-              [s.x, s.y],
-              [t.x, t.y],
-            ]
-          : [
-              [s.x, s.y],
-              [s.x + (t.x - s.x) * 0.35, midY],
-              [t.x, t.y],
-            ];
-      linkGroup
-        .append("path")
-        .attr("d", line(pathData) ?? "")
-        .attr("fill", "none")
-        .attr("stroke", strokeForVariant(link.variant))
-        .attr("stroke-width", link.variant === "backbone" ? 2.5 : 1.5)
-        .attr("stroke-dasharray", link.variant === "backbone" ? "none" : "4 3")
-        .attr("opacity", 0.9);
-
-      if (link.label && link.variant !== "backbone") {
+      graph.links.forEach((link, linkIndex) => {
+        const s = positions.get(link.sourceId);
+        const t = positions.get(link.targetId);
+        if (!s || !t) {
+          return;
+        }
+        const midY =
+          link.variant === "backbone"
+            ? s.y
+            : s.y + 18 + (linkIndex % 6) * 7;
+        const pathData: [number, number][] =
+          link.variant === "backbone"
+            ? [
+                [s.x, s.y],
+                [t.x, t.y],
+              ]
+            : [
+                [s.x, s.y],
+                [s.x + (t.x - s.x) * 0.35, midY],
+                [t.x, t.y],
+              ];
         linkGroup
+          .append("path")
+          .attr("d", line(pathData) ?? "")
+          .attr("fill", "none")
+          .attr("stroke", strokeForVariant(link.variant))
+          .attr("stroke-width", link.variant === "backbone" ? 2.5 : 1.5)
+          .attr("stroke-dasharray", link.variant === "backbone" ? "none" : "4 3")
+          .attr("opacity", 0.9);
+
+        if (link.label && link.variant !== "backbone") {
+          linkGroup
+            .append("text")
+            .attr("x", (s.x + t.x) / 2)
+            .attr("y", midY - 6)
+            .attr("text-anchor", "middle")
+            .attr("fill", COLORS.muted)
+            .attr("font-size", 9)
+            .text(link.label.length > 36 ? `${link.label.slice(0, 35)}…` : link.label);
+        }
+      });
+
+      for (const node of graph.nodes) {
+        const p = positions.get(node.id);
+        if (!p) {
+          continue;
+        }
+        if (node.kind === "entry") {
+          nodeGroup
+            .append("circle")
+            .attr("cx", p.x)
+            .attr("cy", p.y)
+            .attr("r", 12)
+            .attr("fill", COLORS.backbone);
+          nodeGroup
+            .append("text")
+            .attr("x", p.x)
+            .attr("y", p.y + 4)
+            .attr("text-anchor", "middle")
+            .attr("fill", "#fff")
+            .attr("font-size", 10)
+            .text("Entry");
+        } else if (node.kind === "hop") {
+          nodeGroup
+            .append("rect")
+            .attr("x", p.x - 58)
+            .attr("y", p.y - 20)
+            .attr("width", 116)
+            .attr("height", 40)
+            .attr("rx", 10)
+            .attr("fill", node.chainHopId && routingFailedChainHopIds.has(node.chainHopId) ? "#fef2f2" : "#f9fafb")
+            .attr("stroke", node.chainHopId && routingFailedChainHopIds.has(node.chainHopId) ? "#fecaca" : "#e5e7eb");
+          nodeGroup
+            .append("text")
+            .attr("x", p.x)
+            .attr("y", p.y - 2)
+            .attr("text-anchor", "middle")
+            .attr("fill", COLORS.text)
+            .attr("font-size", 11)
+            .attr("font-weight", 600)
+            .text(node.label.length > 16 ? `${node.label.slice(0, 15)}…` : node.label);
+          if (node.sublabel) {
+            nodeGroup
+              .append("text")
+              .attr("x", p.x)
+              .attr("y", p.y + 12)
+              .attr("text-anchor", "middle")
+              .attr("fill", COLORS.muted)
+              .attr("font-size", 9)
+              .text(node.sublabel);
+          }
+          if (node.chainHopId && routingFailedChainHopIds.has(node.chainHopId)) {
+            nodeGroup
+              .append("text")
+              .attr("x", p.x)
+              .attr("y", p.y + 34)
+              .attr("text-anchor", "middle")
+              .attr("fill", COLORS.block)
+              .attr("font-size", 9)
+              .text("Routing unavailable");
+          }
+        } else {
+          const hopLabel =
+            node.chainHopId !== undefined
+              ? graph.nodes.find((x) => x.kind === "hop" && x.chainHopId === node.chainHopId)?.label
+              : undefined;
+          nodeGroup
+            .append("rect")
+            .attr("x", p.x - 44)
+            .attr("y", p.y - 14)
+            .attr("width", 88)
+            .attr("height", hopLabel ? 38 : 28)
+            .attr("rx", 8)
+            .attr("fill", node.kind === "sink_direct" ? "#ecfdf5" : "#fef2f2")
+            .attr("stroke", node.kind === "sink_direct" ? "#a7f3d0" : "#fecaca");
+          nodeGroup
+            .append("text")
+            .attr("x", p.x)
+            .attr("y", p.y + 4)
+            .attr("text-anchor", "middle")
+            .attr("fill", COLORS.text)
+            .attr("font-size", 11)
+            .text(node.label);
+          if (hopLabel) {
+            nodeGroup
+              .append("text")
+              .attr("x", p.x)
+              .attr("y", p.y + 22)
+              .attr("text-anchor", "middle")
+              .attr("fill", COLORS.muted)
+              .attr("font-size", 8)
+              .text(`hop: ${hopLabel.length > 12 ? `${hopLabel.slice(0, 11)}…` : hopLabel}`);
+          }
+        }
+      }
+
+      const legendY = height - 28;
+      const items: [string, string][] = [
+        ["Backbone", COLORS.backbone],
+        ["Continue", COLORS.continue],
+        ["Direct", COLORS.direct],
+        ["Block", COLORS.block],
+      ];
+      let lx = 12;
+      for (const [label, color] of items) {
+        zoomRoot.append("circle").attr("cx", lx).attr("cy", legendY).attr("r", 4).attr("fill", color);
+        zoomRoot
           .append("text")
-          .attr("x", (s.x + t.x) / 2)
-          .attr("y", midY - 6)
-          .attr("text-anchor", "middle")
+          .attr("x", lx + 10)
+          .attr("y", legendY + 4)
           .attr("fill", COLORS.muted)
-          .attr("font-size", 9)
-          .text(link.label.length > 36 ? `${link.label.slice(0, 35)}…` : link.label);
-      }
-    });
-
-    for (const node of graph.nodes) {
-      const p = positions.get(node.id);
-      if (!p) {
-        continue;
-      }
-      if (node.kind === "entry") {
-        nodeGroup
-          .append("circle")
-          .attr("cx", p.x)
-          .attr("cy", p.y)
-          .attr("r", 12)
-          .attr("fill", COLORS.backbone);
-        nodeGroup
-          .append("text")
-          .attr("x", p.x)
-          .attr("y", p.y + 4)
-          .attr("text-anchor", "middle")
-          .attr("fill", "#fff")
           .attr("font-size", 10)
-          .text("Entry");
-      } else if (node.kind === "hop") {
-        nodeGroup
-          .append("rect")
-          .attr("x", p.x - 58)
-          .attr("y", p.y - 20)
-          .attr("width", 116)
-          .attr("height", 40)
-          .attr("rx", 10)
-          .attr("fill", node.chainHopId && routingFailedChainHopIds.has(node.chainHopId) ? "#fef2f2" : "#f9fafb")
-          .attr("stroke", node.chainHopId && routingFailedChainHopIds.has(node.chainHopId) ? "#fecaca" : "#e5e7eb");
-        nodeGroup
+          .text(label);
+        lx += 88;
+      }
+
+      const truncated = graph.truncatedRuleCountByHopId;
+      const hopIdsTrunc = Object.keys(truncated);
+      if (hopIdsTrunc.length > 0) {
+        const total = hopIdsTrunc.reduce((a, k) => a + (truncated[Number(k)] ?? 0), 0);
+        zoomRoot
           .append("text")
-          .attr("x", p.x)
-          .attr("y", p.y - 2)
-          .attr("text-anchor", "middle")
-          .attr("fill", COLORS.text)
-          .attr("font-size", 11)
-          .attr("font-weight", 600)
-          .text(node.label.length > 16 ? `${node.label.slice(0, 15)}…` : node.label);
-        if (node.sublabel) {
-          nodeGroup
-            .append("text")
-            .attr("x", p.x)
-            .attr("y", p.y + 12)
-            .attr("text-anchor", "middle")
-            .attr("fill", COLORS.muted)
-            .attr("font-size", 9)
-            .text(node.sublabel);
-        }
-        if (node.chainHopId && routingFailedChainHopIds.has(node.chainHopId)) {
-          nodeGroup
-            .append("text")
-            .attr("x", p.x)
-            .attr("y", p.y + 34)
-            .attr("text-anchor", "middle")
-            .attr("fill", COLORS.block)
-            .attr("font-size", 9)
-            .text("Routing unavailable");
-        }
-      } else {
-        const hopLabel =
-          node.chainHopId !== undefined
-            ? graph.nodes.find((x) => x.kind === "hop" && x.chainHopId === node.chainHopId)?.label
-            : undefined;
-        nodeGroup
-          .append("rect")
-          .attr("x", p.x - 44)
-          .attr("y", p.y - 14)
-          .attr("width", 88)
-          .attr("height", hopLabel ? 38 : 28)
-          .attr("rx", 8)
-          .attr("fill", node.kind === "sink_direct" ? "#ecfdf5" : "#fef2f2")
-          .attr("stroke", node.kind === "sink_direct" ? "#a7f3d0" : "#fecaca");
-        nodeGroup
+          .attr("x", width - 12)
+          .attr("y", legendY + 4)
+          .attr("text-anchor", "end")
+          .attr("fill", COLORS.muted)
+          .attr("font-size", 10)
+          .text(`+${total} more rule(s) — edit on Routing page`);
+      }
+
+      if (routingLoading) {
+        zoomRoot
           .append("text")
-          .attr("x", p.x)
-          .attr("y", p.y + 4)
-          .attr("text-anchor", "middle")
-          .attr("fill", COLORS.text)
+          .attr("x", width - 12)
+          .attr("y", 18)
+          .attr("text-anchor", "end")
+          .attr("fill", COLORS.muted)
           .attr("font-size", 11)
-          .text(node.label);
-        if (hopLabel) {
-          nodeGroup
-            .append("text")
-            .attr("x", p.x)
-            .attr("y", p.y + 22)
-            .attr("text-anchor", "middle")
-            .attr("fill", COLORS.muted)
-            .attr("font-size", 8)
-            .text(`hop: ${hopLabel.length > 12 ? `${hopLabel.slice(0, 11)}…` : hopLabel}`);
-        }
+          .text("Loading routing…");
       }
     }
 
-    const legendY = height - 28;
-    const items: [string, string][] = [
-      ["Backbone", COLORS.backbone],
-      ["Continue", COLORS.continue],
-      ["Direct", COLORS.direct],
-      ["Block", COLORS.block],
-    ];
-    let lx = 12;
-    for (const [label, color] of items) {
-      gRoot.append("circle").attr("cx", lx).attr("cy", legendY).attr("r", 4).attr("fill", color);
-      gRoot
-        .append("text")
-        .attr("x", lx + 10)
-        .attr("y", legendY + 4)
-        .attr("fill", COLORS.muted)
-        .attr("font-size", 10)
-        .text(label);
-      lx += 88;
-    }
+    const zoom = d3
+      .zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.35, 4])
+      .on("zoom", (event) => {
+        transformRef.current = event.transform;
+        zoomRoot.attr("transform", event.transform.toString());
+      });
 
-    const truncated = graph.truncatedRuleCountByHopId;
-    const hopIdsTrunc = Object.keys(truncated);
-    if (hopIdsTrunc.length > 0) {
-      const total = hopIdsTrunc.reduce((a, k) => a + (truncated[Number(k)] ?? 0), 0);
-      gRoot
-        .append("text")
-        .attr("x", width - 12)
-        .attr("y", legendY + 4)
-        .attr("text-anchor", "end")
-        .attr("fill", COLORS.muted)
-        .attr("font-size", 10)
-        .text(`+${total} more rule(s) — edit on Routing page`);
-    }
-
-    if (routingLoading) {
-      gRoot
-        .append("text")
-        .attr("x", width - 12)
-        .attr("y", 18)
-        .attr("text-anchor", "end")
-        .attr("fill", COLORS.muted)
-        .attr("font-size", 11)
-        .text("Loading routing…");
-    }
-  }, [width, hops, routingByChainHopId, routingFailedChainHopIds, routingLoading, draftLabels]);
+    svg.call(zoom);
+    zoomBehaviorRef.current = zoom;
+    svg.call(zoom.transform, transformRef.current);
+  }, [width, hops, routingByChainHopId, routingFailedChainHopIds, routingLoading, draftLabels, diagramKey]);
 
   const showDraftOnly = hops.length === 0 && !!draftLabels?.length;
   const showEmpty = hops.length === 0 && !draftLabels?.length;
@@ -412,7 +441,27 @@ export function ChainTrafficDiagram({
   };
 
   return (
-    <div style={outerStyle}>
+    <div style={outerStyle} onWheel={!showEmpty ? (e) => e.preventDefault() : undefined}>
+      {!showEmpty ? (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 12px 0" }}>
+          <button
+            type="button"
+            onClick={handleResetView}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "8px",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              border: "1px solid #d1d5db",
+              background: "#ffffff",
+              color: "#374151",
+            }}
+          >
+            Reset view
+          </button>
+        </div>
+      ) : null}
       <svg
         ref={svgRef}
         width={width}
