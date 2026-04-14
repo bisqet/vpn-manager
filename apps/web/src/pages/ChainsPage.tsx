@@ -1,15 +1,46 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, FormEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
+import { ChainTrafficDiagram } from "../components/ChainTrafficDiagram";
+import type { ChainHopInput, RoutingProfileInput } from "../chainTrafficGraph";
 
 const chainsQueryKey = ["chains"] as const;
 const profilesQueryKey = ["profiles"] as const;
+
+type ChainHop = {
+  id: number;
+  position: number;
+  vpnProfileId: number;
+  label: string;
+};
 
 type Chain = {
   id: number;
   name: string;
   vpnProfileIds: number[];
+  hops: ChainHop[];
+};
+
+type DefaultAction = "use_chain" | "direct" | "block";
+type MatchKind = "domain" | "cidr";
+type RuleAction = "direct" | "use_chain" | "block";
+
+type RoutingRule = {
+  id: number;
+  position: number;
+  matchKind: MatchKind;
+  matchValue: string;
+  action: RuleAction;
+};
+
+type RoutingProfile = {
+  id: number;
+  name: string;
+  chainId: number;
+  chainHopId: number;
+  defaultAction: DefaultAction;
+  rules: RoutingRule[];
 };
 
 type VpnProfile = {
@@ -44,6 +75,10 @@ function fetchChains() {
 
 function fetchProfiles() {
   return apiFetch<VpnProfile[]>("/api/profiles");
+}
+
+function fetchRoutingByHop(chainHopId: number) {
+  return apiFetch<RoutingProfile>(`/api/routing/by-hop/${chainHopId}`);
 }
 
 function createChain(payload: ChainPayload) {
@@ -118,6 +153,24 @@ function hasValidationError(
 export default function ChainsPage() {
   const queryClient = useQueryClient();
   const nextHopKeyRef = useRef(0);
+  const diagramContainerRef = useRef<HTMLDivElement>(null);
+  const [diagramWidth, setDiagramWidth] = useState(0);
+
+  function chainHopRowsFromChain(chain: Chain): HopRow[] {
+    if (chain.hops.length > 0) {
+      return [...chain.hops]
+        .sort((a, b) => a.position - b.position)
+        .map((h) => ({
+          key: nextHopKeyRef.current++,
+          vpnProfileId: String(h.vpnProfileId),
+        }));
+    }
+
+    return chain.vpnProfileIds.map((vpnProfileId) => ({
+      key: nextHopKeyRef.current++,
+      vpnProfileId: String(vpnProfileId),
+    }));
+  }
 
   const chainsQuery = useQuery({
     queryKey: chainsQueryKey,
@@ -149,12 +202,7 @@ export default function ChainsPage() {
       }
 
       setChainName(chain.name);
-      setHopRows(
-        chain.vpnProfileIds.map((vpnProfileId) => ({
-          key: nextHopKeyRef.current++,
-          vpnProfileId: String(vpnProfileId),
-        })),
-      );
+      setHopRows(chainHopRowsFromChain(chain));
       setFormError(null);
       return;
     }
@@ -202,6 +250,84 @@ export default function ChainsPage() {
   const isDeleting = deleteMutation.isPending;
   const isCreateMode = editorState.mode === "create";
 
+  const sortedHopsForDiagram = useMemo((): ChainHopInput[] => {
+    if (!selectedChain) {
+      return [];
+    }
+    return [...selectedChain.hops].sort((a, b) => a.position - b.position);
+  }, [selectedChain]);
+
+  const routingQueries = useQueries({
+    queries: sortedHopsForDiagram.map((h) => ({
+      queryKey: ["routing", "by-hop", h.id] as const,
+      queryFn: () => fetchRoutingByHop(h.id),
+      enabled: editorState.mode === "edit" && sortedHopsForDiagram.length > 0,
+    })),
+  });
+
+  const routingByChainHopId = useMemo(() => {
+    const map = new Map<number, RoutingProfileInput>();
+    sortedHopsForDiagram.forEach((h, index) => {
+      const query = routingQueries[index];
+      if (!query?.data) {
+        return;
+      }
+      map.set(h.id, {
+        chainHopId: query.data.chainHopId,
+        defaultAction: query.data.defaultAction,
+        rules: query.data.rules.map((rule) => ({
+          position: rule.position,
+          matchKind: rule.matchKind,
+          matchValue: rule.matchValue,
+          action: rule.action,
+        })),
+      });
+    });
+    return map;
+  }, [routingQueries, sortedHopsForDiagram]);
+
+  const routingFailedChainHopIds = useMemo(() => {
+    const failed = new Set<number>();
+    sortedHopsForDiagram.forEach((h, index) => {
+      const query = routingQueries[index];
+      if (query?.isError) {
+        failed.add(h.id);
+      }
+    });
+    return failed;
+  }, [routingQueries, sortedHopsForDiagram]);
+
+  const routingLoading = useMemo(
+    () => routingQueries.some((query) => query.isPending || query.isFetching),
+    [routingQueries],
+  );
+
+  const draftDiagramLabels = useMemo(() => {
+    if (!isCreateMode) {
+      return undefined;
+    }
+
+    return hopRows
+      .map((row) => profiles.find((profile) => String(profile.id) === row.vpnProfileId)?.label)
+      .filter((label): label is string => Boolean(label));
+  }, [hopRows, isCreateMode, profiles]);
+
+  useLayoutEffect(() => {
+    const element = diagramContainerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      setDiagramWidth(element.getBoundingClientRect().width);
+    });
+
+    observer.observe(element);
+    setDiagramWidth(element.getBoundingClientRect().width);
+
+    return () => observer.disconnect();
+  }, []);
+
   function makeHopRow() {
     return {
       key: nextHopKeyRef.current++,
@@ -212,12 +338,7 @@ export default function ChainsPage() {
   function loadChainIntoEditor(chain: Chain) {
     setEditorState({ mode: "edit", chainId: chain.id });
     setChainName(chain.name);
-    setHopRows(
-      chain.vpnProfileIds.map((vpnProfileId) => ({
-        key: nextHopKeyRef.current++,
-        vpnProfileId: String(vpnProfileId),
-      })),
-    );
+    setHopRows(chainHopRowsFromChain(chain));
     setFormError(null);
   }
 
@@ -510,6 +631,23 @@ export default function ChainsPage() {
             </button>
           </div>
         </form>
+
+        <div ref={diagramContainerRef} style={diagramSectionStyle}>
+          <h3 style={sectionTitleStyle}>Traffic diagram</h3>
+          <p style={helperTextStyle}>
+            VPN hop order and per-hop routing. Edit routing rules on the Routing page.
+          </p>
+          {diagramWidth > 0 ? (
+            <ChainTrafficDiagram
+              draftLabels={draftDiagramLabels}
+              hops={isCreateMode ? [] : sortedHopsForDiagram}
+              routingByChainHopId={routingByChainHopId}
+              routingFailedChainHopIds={routingFailedChainHopIds}
+              routingLoading={routingLoading}
+              width={diagramWidth}
+            />
+          ) : null}
+        </div>
       </section>
     </div>
   );
@@ -538,6 +676,12 @@ const headerRowStyle: CSSProperties = {
 
 const editorHeaderStyle: CSSProperties = {
   marginBottom: "24px",
+};
+
+const diagramSectionStyle: CSSProperties = {
+  marginTop: "28px",
+  paddingTop: "20px",
+  borderTop: "1px solid #e5e7eb",
 };
 
 const sectionHeaderStyle: CSSProperties = {

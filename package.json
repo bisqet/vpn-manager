@@ -8,6 +8,7 @@
     "build": "bun run build:web",
     "build:web": "bun --cwd apps/web build",
     "start": "bun --cwd apps/server start",
-    "test": "bun test apps/server"
+    "test": "bun test apps/server",
+    "test:web": "bun --cwd apps/web test"
   }
 }
