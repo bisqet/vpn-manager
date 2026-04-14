@@ -504,6 +504,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
       deleteProfile(variables.id, { force: variables.force }),
     onSuccess: async (_, variables) => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ["chains"] });
       setSshProfile((current) => (current?.id === variables.id ? null : current));
       setSetupSheet((current) => (current?.profile.id === variables.id ? null : current));
       setPendingForceDeleteId(null);
