@@ -7,6 +7,7 @@ import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
+import { executeProfileSetup } from "../vpn/setupRunner";
 import type { SshExecFn } from "../vpn/sshExec";
 
 type ProfileRow = {
@@ -405,7 +406,41 @@ describe("profilesRoutes", () => {
     expect(row?.operational_status).toBe("pending");
   });
 
-  test("POST /api/profiles/:id/setup live path succeeds with fake ssh when ACME email empty", async () => {
+  test("POST /api/profiles/:id/setup returns 410 with useSetupTerminal when VPN_SSH_ENABLED is true", async () => {
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "WsSetup",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.ws-setup.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(410);
+    const body = (await setupRes.json()) as { error: string; useSetupTerminal?: boolean };
+    expect(body.useSetupTerminal).toBe(true);
+    expect(body.error).toBe("Live setup runs in the browser terminal");
+  });
+
+  test("executeProfileSetup live path succeeds with fake ssh when ACME email empty", async () => {
     putTestAppSettings(db, {
       acmeEmail: "",
       vpnSshEnabled: true,
@@ -430,17 +465,18 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
-    const body = await setupRes.json();
-    expect(body.setup.mode).toBe("live");
-    expect(body.profile.operationalStatus).toBe("working");
+    expect(setupOutcome.outcome).toBe("live-success");
+    expect(setupOutcome.setup.mode).toBe("live");
+    expect(setupOutcome.profileRow.operational_status).toBe("working");
   });
 
-  test("POST /api/profiles/:id/setup live path succeeds with fake ssh", async () => {
+  test("executeProfileSetup live path succeeds with fake ssh", async () => {
     putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
       vpnSshEnabled: true,
@@ -465,14 +501,15 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
-    const body = await setupRes.json();
-    expect(body.setup.mode).toBe("live");
-    expect(body.profile.operationalStatus).toBe("working");
+    expect(setupOutcome.outcome).toBe("live-success");
+    expect(setupOutcome.setup.mode).toBe("live");
+    expect(setupOutcome.profileRow.operational_status).toBe("working");
     const row = db
       .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
         "SELECT operational_status, xui_web_base_path FROM vpn_profiles WHERE id = 1",
@@ -507,11 +544,13 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
+    expect(setupOutcome.outcome).toBe("live-success");
 
     const listRes = await app.request("/api/profiles");
     expect(listRes.status).toBe(200);
@@ -550,11 +589,13 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
+    expect(setupOutcome.outcome).toBe("live-success");
 
     const dbRow = db
       .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
@@ -640,11 +681,13 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
+    expect(setupOutcome.outcome).toBe("live-success");
 
     const dbRow = db
       .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
@@ -827,6 +870,126 @@ describe("profilesRoutes", () => {
     expect(res.status).toBe(404);
   });
 
+  test("GET /api/profiles/1/setup-terminal without session returns 401", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/setup-terminal", {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/profiles/1/setup-terminal with session when VPN_SSH_ENABLED false returns 403", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    putTestAppSettings(db, {
+      acmeEmail: "",
+      vpnSshEnabled: false,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/setup-terminal", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("GET /api/profiles/abc/setup-terminal with invalid id returns 400", async () => {
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/abc/setup-terminal", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /api/profiles/99/setup-terminal with missing profile returns 404", async () => {
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/99/setup-terminal", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /api/profiles/1/setup-terminal when profile not pending returns 409", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    db.query("UPDATE vpn_profiles SET operational_status = 'working' WHERE id = 1").run();
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/setup-terminal", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(409);
+  });
+
+  test("GET /api/profiles/1/setup-terminal when panel hostname blank returns 400", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    db.query("UPDATE vpn_profiles SET panel_hostname = '   ' WHERE id = 1").run();
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/setup-terminal", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "panelHostname is required before setup" });
+  });
+
+  test("GET /api/profiles/1/setup-terminal without WebSocket upgrade returns 426", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/setup-terminal", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(res.status).toBe(426);
+    expect(await res.json()).toEqual({ error: "Expected WebSocket upgrade" });
+  });
+
   test("GET /api/profiles/ssh-terminal/preflight returns sshTerminalEnabled", async () => {
     putTestAppSettings(db, {
       acmeEmail: "",
@@ -945,11 +1108,13 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
+    expect(setupOutcome.outcome).toBe("live-success");
 
     const clearRes = await app.request("/api/profiles/1/clear-server", {
       method: "POST",
@@ -1009,11 +1174,13 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupRes = await app.request("/api/profiles/1/setup", {
-      method: "POST",
-      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    const setupOutcome = await executeProfileSetup({
+      db,
+      env: { masterKey: env.masterKey },
+      profileId: 1,
+      sshExec: fakeSsh,
     });
-    expect(setupRes.status).toBe(200);
+    expect(setupOutcome.outcome).toBe("live-success");
 
     teardownPhase = "clear";
     clearCallIndex = 0;

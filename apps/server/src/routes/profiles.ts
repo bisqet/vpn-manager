@@ -13,6 +13,8 @@ import { getAppSettings } from "../db/appSettings";
 import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
+import { createProfileSetupTerminalWebSocketHandlers } from "../vpn/profileSetupTerminalBridge";
+import { resolveProfileSetupTerminal } from "../vpn/profileSetupTerminalGate";
 import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
 import { resolveProfileSshTerminal } from "../vpn/profileSshTerminalGate";
 import { executeProfileSetup } from "../vpn/setupRunner";
@@ -193,6 +195,28 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       return c.json({ error: "Profile not found" }, 404);
     }
 
+    if (existing.operational_status === "working") {
+      return c.json(
+        { error: "Profile is already set up (working). Reset is not available yet." },
+        409,
+      );
+    }
+
+    if (!existing.panel_hostname || existing.panel_hostname.trim() === "") {
+      return c.json({ error: "panelHostname is required before setup" }, 400);
+    }
+
+    const setupAppSettings = getAppSettings(db);
+    if (setupAppSettings.vpnSshEnabled) {
+      return c.json(
+        {
+          error: "Live setup runs in the browser terminal",
+          useSetupTerminal: true,
+        },
+        410,
+      );
+    }
+
     try {
       const result = await executeProfileSetup({
         db,
@@ -237,6 +261,22 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       throw e;
     }
   });
+
+  function jsonForSetupTerminalGateFailure(
+    status: 400 | 401 | 403 | 404 | 409,
+    profileId: number | null,
+  ): { error: string } {
+    if (status === 401) return { error: "Unauthorized" };
+    if (status === 403) return { error: "SSH is disabled on this server" };
+    if (status === 404) return { error: "Profile not found" };
+    if (status === 409) {
+      return { error: "Profile is already set up (working). Reset is not available yet." };
+    }
+    if (profileId === null || !Number.isInteger(profileId) || profileId < 1) {
+      return { error: "Invalid VPN profile id" };
+    }
+    return { error: "panelHostname is required before setup" };
+  }
 
   app.post("/:id/clear-server", async (c) => {
     const id = parseId(c.req.param("id"));
@@ -544,6 +584,54 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         row: gate.row,
         sshPassword: gate.sshPassword,
         env: { sshKnownHostsFile: appSettings.sshKnownHostsFile ?? undefined },
+      });
+    }),
+  );
+
+  app.get(
+    "/:id/setup-terminal",
+    async (c, next) => {
+      const upgrade = c.req.header("Upgrade");
+      if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+        return c.json({ error: "Expected WebSocket upgrade" }, 426);
+      }
+
+      const setupTerminalProfileId = parseId(c.req.param("id"));
+      if (setupTerminalProfileId === null) {
+        return c.json({ error: "Invalid VPN profile id" }, 400);
+      }
+
+      const token = getCookie(c, SESSION_COOKIE);
+      const setupTerminalUserId = getSessionUserId(db, token);
+      const setupTerminalAppSettings = getAppSettings(db);
+
+      const setupGate = await resolveProfileSetupTerminal({
+        db,
+        masterKey: env.masterKey,
+        vpnSshEnabled: setupTerminalAppSettings.vpnSshEnabled,
+        userId: setupTerminalUserId,
+        profileId: setupTerminalProfileId,
+      });
+
+      if (!setupGate.ok) {
+        return c.json(
+          jsonForSetupTerminalGateFailure(setupGate.status, setupTerminalProfileId),
+          setupGate.status,
+        );
+      }
+
+      c.set("setupTerminalGate", setupGate);
+      await next();
+    },
+    uw((c) => {
+      const gate = c.get("setupTerminalGate");
+      return createProfileSetupTerminalWebSocketHandlers({
+        db,
+        env: { masterKey: env.masterKey },
+        profileId: gate.row.id,
+        row: gate.row,
+        sshPassword: gate.sshPassword,
+        getAppSettings: () => getAppSettings(db),
       });
     }),
   );
