@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS vpn_profiles (
   ssh_password_ciphertext BLOB NOT NULL,
   ssh_password_nonce BLOB NOT NULL,
   operational_status TEXT NOT NULL DEFAULT 'pending' CHECK (operational_status IN ('pending','working')),
+  panel_hostname TEXT NOT NULL DEFAULT '',
+  xui_secrets_ciphertext BLOB,
+  xui_secrets_nonce BLOB,
+  xui_web_base_path TEXT,
+  last_setup_error TEXT,
+  last_setup_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

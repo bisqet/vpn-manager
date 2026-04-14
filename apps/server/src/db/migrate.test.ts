@@ -28,4 +28,15 @@ describe("migrate", () => {
     const cols = db.query<{ name: string }, []>("PRAGMA table_info(vpn_profiles)").all();
     expect(cols.map((c) => c.name)).toContain("operational_status");
   });
+
+  test("vpn_profiles has 3x-ui setup columns", () => {
+    migrate(db);
+    const names = db.query<{ name: string }, []>("PRAGMA table_info(vpn_profiles)").all().map((c) => c.name);
+    expect(names).toContain("panel_hostname");
+    expect(names).toContain("xui_secrets_ciphertext");
+    expect(names).toContain("xui_secrets_nonce");
+    expect(names).toContain("xui_web_base_path");
+    expect(names).toContain("last_setup_error");
+    expect(names).toContain("last_setup_at");
+  });
 });
