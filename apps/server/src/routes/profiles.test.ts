@@ -286,7 +286,7 @@ describe("profilesRoutes", () => {
     });
   });
 
-  test("force-deletes profile, removes hops, renumbers remaining hops, removes empty chains", async () => {
+  test("force-deletes profile, removes hops, renumbers remaining hops on multi-hop chain", async () => {
     const app = createApp(db, env);
 
     for (const body of [
@@ -351,8 +351,8 @@ describe("profilesRoutes", () => {
     expect(forceRes.status).toBe(200);
 
     expect(db.query("SELECT id FROM vpn_profiles WHERE id = ?").get(1)).toBeNull();
-    expect(db.query("SELECT id FROM chain_hops WHERE chain_id = ?", [1]).all()).toEqual([]);
-    expect(db.query("SELECT id FROM chains WHERE id = ?", [1]).get(1)).toBeNull();
+    expect(db.query("SELECT id FROM chain_hops WHERE chain_id = ?").all(1)).toEqual([]);
+    expect(db.query("SELECT id FROM chains WHERE id = ?").get(1)).toBeNull();
   });
 
   test("POST /api/profiles/:id/setup returns dry-run when VPN_SSH_ENABLED is false", async () => {
