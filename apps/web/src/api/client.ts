@@ -105,3 +105,22 @@ export function login(username: string, password: string) {
     body: { username, password },
   });
 }
+
+export type AppSettingsDto = {
+  acmeEmail: string;
+  vpnSshEnabled: boolean;
+  sshKnownHostsFile: string | null;
+  updatedAt: string;
+};
+
+export const settingsQueryKey = ["settings"] as const;
+
+export function fetchSettings() {
+  return apiFetch<AppSettingsDto>("/api/settings");
+}
+
+export function patchSettings(
+  patch: Partial<Pick<AppSettingsDto, "acmeEmail" | "vpnSshEnabled" | "sshKnownHostsFile">>,
+) {
+  return apiFetch<AppSettingsDto>("/api/settings", { method: "PATCH", body: patch });
+}

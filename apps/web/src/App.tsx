@@ -7,6 +7,7 @@ import ExportPage from "./pages/ExportPage";
 import ImportPage from "./pages/ImportPage";
 import LoginPage from "./pages/LoginPage";
 import RoutingPage from "./pages/RoutingPage";
+import SettingsPage from "./pages/SettingsPage";
 import VpnsPage from "./pages/VpnsPage";
 
 const navItems = [
@@ -15,6 +16,7 @@ const navItems = [
   { path: "/routing", label: "Routing" },
   { path: "/import", label: "Import" },
   { path: "/export", label: "Export" },
+  { path: "/settings", label: "Settings" },
 ] as const;
 
 export default function App() {
@@ -28,6 +30,7 @@ export default function App() {
         <Route path="/routing" element={<RoutingPage />} />
         <Route path="/import" element={<ImportPage />} />
         <Route path="/export" element={<ExportPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/vpns" replace />} />
     </Routes>
@@ -101,7 +104,7 @@ function VpnsShell() {
               <Link style={guestSignInLinkStyle} to="/login">
                 Sign in
               </Link>{" "}
-              for chains, routing, import, and export.
+              for chains, routing, import, export, and settings.
             </p>
           )}
         </nav>
