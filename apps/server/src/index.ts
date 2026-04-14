@@ -13,11 +13,12 @@ import { chainsRoutes } from "./routes/chains";
 import { importRoutes } from "./routes/import";
 import { profilesRoutes, type ProfilesRoutesOptions } from "./routes/profiles";
 import { routingRoutes } from "./routes/routing";
+import { settingsRoutes } from "./routes/settings";
 
 // Dev note: set VPN_MANAGER_MASTER_KEY to the base64 of 32 random bytes before starting the server.
 export function createApp(
   db: Database,
-  env: Pick<Env, "masterKey" | "staticDir" | "vpnSshEnabled" | "acmeEmail" | "sshKnownHostsFile">,
+  env: Pick<Env, "masterKey" | "staticDir">,
   options?: { profiles?: ProfilesRoutesOptions },
 ) {
   const app = new Hono();
@@ -42,6 +43,7 @@ export function createApp(
   authed.route("/chains", chainsRoutes(db));
   authed.route("/routing", routingRoutes(db));
   authed.route("/import", importRoutes(db, env));
+  authed.route("/settings", settingsRoutes(db));
   api.route("/", authed);
 
   app.route("/api", api);
@@ -90,7 +92,7 @@ function getServerState() {
 
   const env = loadEnv();
   const db = openDatabase(env.databasePath);
-  const app = createApp(db, env);
+  const app = createApp(db, { masterKey: env.masterKey, staticDir: env.staticDir });
   serverState = { app, env };
   return serverState;
 }

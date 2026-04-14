@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SESSION_COOKIE } from "../auth/cookie";
 import { decryptVpnPassword, encryptVpnPassword } from "../crypto/vpnSecret";
+import { putTestAppSettings } from "../db/appSettings";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
@@ -25,9 +26,6 @@ const env: Env = {
   port: 3000,
   databasePath: ":memory:",
   masterKey: new Uint8Array(32).fill(9),
-  vpnSshEnabled: false,
-  acmeEmail: undefined,
-  sshKnownHostsFile: undefined,
 };
 
 describe("profilesRoutes", () => {
@@ -43,6 +41,11 @@ describe("profilesRoutes", () => {
       1,
       Date.now() + 60_000,
     );
+    putTestAppSettings(db, {
+      acmeEmail: "",
+      vpnSshEnabled: false,
+      sshKnownHostsFile: null,
+    });
   });
 
   test("creates profile with derived panel when host is public IP and panelHostname omitted", async () => {
@@ -403,13 +406,13 @@ describe("profilesRoutes", () => {
   });
 
   test("POST /api/profiles/:id/setup live path succeeds with fake ssh", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -445,13 +448,13 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles returns panelUrl null without session when profile working", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -488,13 +491,13 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles/:id/panel-login returns 200 with credentials after live setup", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -578,13 +581,13 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles returns panelUrl when session and working", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -725,7 +728,12 @@ describe("profilesRoutes", () => {
 
   test("GET /api/profiles/1/ssh without session returns 401", async () => {
     await insertVpnProfileId1ForSsh(db);
-    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
     const res = await app.request("/api/profiles/1/ssh", {
       headers: { Upgrade: "websocket", Connection: "Upgrade" },
     });
@@ -734,7 +742,12 @@ describe("profilesRoutes", () => {
 
   test("GET /api/profiles/1/ssh with session when VPN_SSH_ENABLED false returns 403", async () => {
     await insertVpnProfileId1ForSsh(db);
-    const app = createApp(db, { ...env, vpnSshEnabled: false });
+    putTestAppSettings(db, {
+      acmeEmail: "",
+      vpnSshEnabled: false,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
     const res = await app.request("/api/profiles/1/ssh", {
       headers: {
         Cookie: `${SESSION_COOKIE}=session-token`,
@@ -746,7 +759,12 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles/abc/ssh with invalid id returns 400", async () => {
-    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
     const res = await app.request("/api/profiles/abc/ssh", {
       headers: {
         Cookie: `${SESSION_COOKIE}=session-token`,
@@ -758,7 +776,12 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles/99/ssh with missing profile returns 404", async () => {
-    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
     const res = await app.request("/api/profiles/99/ssh", {
       headers: {
         Cookie: `${SESSION_COOKIE}=session-token`,
@@ -770,7 +793,12 @@ describe("profilesRoutes", () => {
   });
 
   test("GET /api/profiles/ssh-terminal/preflight returns sshTerminalEnabled", async () => {
-    const app = createApp(db, { ...env, vpnSshEnabled: false });
+    putTestAppSettings(db, {
+      acmeEmail: "",
+      vpnSshEnabled: false,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
     const authed = await app.request("/api/profiles/ssh-terminal/preflight", {
       headers: { Cookie: `${SESSION_COOKIE}=session-token` },
     });
@@ -826,13 +854,13 @@ describe("profilesRoutes", () => {
   });
 
   test("POST /api/profiles/:id/clear-server returns 400 when not eligible (pending, no setup failure)", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -858,13 +886,13 @@ describe("profilesRoutes", () => {
   });
 
   test("POST /api/profiles/:id/clear-server live success clears DB fields", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -911,11 +939,11 @@ describe("profilesRoutes", () => {
   });
 
   test("POST /api/profiles/:id/clear-server live failure returns 500 and keeps working", async () => {
-    const liveEnv: Env = {
-      ...env,
-      vpnSshEnabled: true,
+    putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
-    };
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
     let teardownPhase: "setup" | "clear" = "setup";
     let clearCallIndex = 0;
     const fakeSsh: SshExecFn = async () => {
@@ -928,7 +956,7 @@ describe("profilesRoutes", () => {
       }
       return { code: 1, stdout: "", stderr: "boom" };
     };
-    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
 
     await app.request("/api/profiles", {
       method: "POST",

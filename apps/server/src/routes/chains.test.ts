@@ -16,9 +16,6 @@ const env: Env = {
   port: 3000,
   databasePath: ":memory:",
   masterKey: new Uint8Array(32).fill(9),
-  vpnSshEnabled: false,
-  acmeEmail: undefined,
-  sshKnownHostsFile: undefined,
 };
 
 function hopsDtoForChain(db: Database, chainId: number) {

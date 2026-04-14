@@ -9,6 +9,7 @@ import { getSessionUserId } from "../auth/session";
 import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
+import { getAppSettings } from "../db/appSettings";
 import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
@@ -37,7 +38,7 @@ type VpnProfileSecretRow = VpnProfileRow & {
   ssh_password_nonce: Uint8Array;
 };
 
-type ProfilesEnv = Pick<Env, "masterKey" | "vpnSshEnabled" | "acmeEmail" | "sshKnownHostsFile">;
+type ProfilesEnv = Pick<Env, "masterKey">;
 
 export type ProfilesRoutesOptions = {
   sshExec?: SshExecFn;
@@ -142,7 +143,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     if (userId === null) {
       return c.json({ error: "Unauthorized" }, 401);
     }
-    return c.json({ sshTerminalEnabled: env.vpnSshEnabled });
+    return c.json({ sshTerminalEnabled: getAppSettings(db).vpnSshEnabled });
   });
 
   app.post("/", async (c) => {
@@ -195,7 +196,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     try {
       const result = await executeProfileSetup({
         db,
-        env,
+        env: { masterKey: env.masterKey },
         profileId: id,
         sshExec: options.sshExec,
       });
@@ -257,7 +258,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     try {
       const result = await executeProfileTeardown({
         db,
-        env,
+        env: { masterKey: env.masterKey },
         profileId: id,
         sshExec: options.sshExec,
       });
@@ -517,11 +518,12 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
 
       const token = getCookie(c, SESSION_COOKIE);
       const userId = getSessionUserId(db, token);
+      const appSettings = getAppSettings(db);
 
       const gate = await resolveProfileSshTerminal({
         db,
         masterKey: env.masterKey,
-        vpnSshEnabled: env.vpnSshEnabled,
+        vpnSshEnabled: appSettings.vpnSshEnabled,
         userId,
         profileId: id,
       });
@@ -543,10 +545,11 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     },
     uw((c) => {
       const gate = c.get("sshTerminalGate");
+      const appSettings = getAppSettings(db);
       return createProfileSshWebSocketHandlers({
         row: gate.row,
         sshPassword: gate.sshPassword,
-        env: { sshKnownHostsFile: env.sshKnownHostsFile },
+        env: { sshKnownHostsFile: appSettings.sshKnownHostsFile ?? undefined },
       });
     }),
   );

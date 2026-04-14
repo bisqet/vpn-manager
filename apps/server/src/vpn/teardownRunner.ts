@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { getAppSettings } from "../db/appSettings";
 import { decryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { buildTeardownPhases } from "./teardownPhases";
@@ -19,7 +20,7 @@ export type TeardownResult =
   | { mode: "dry-run"; phases: TeardownPhaseResult[] }
   | { mode: "live"; phases: TeardownPhaseResult[] };
 
-type TeardownEnv = Pick<Env, "masterKey" | "vpnSshEnabled" | "sshKnownHostsFile">;
+type TeardownEnv = Pick<Env, "masterKey">;
 
 export type ExecuteProfileTeardownOutcome =
   | { outcome: "dry-run"; profileRow: ProfileSetupRow; teardown: Extract<TeardownResult, { mode: "dry-run" }> }
@@ -64,13 +65,14 @@ export async function executeProfileTeardown(options: {
 }): Promise<ExecuteProfileTeardownOutcome> {
   const { db, env, profileId } = options;
   const sshExec = options.sshExec ?? buildSshExecUsingSpawn();
+  const settings = getAppSettings(db);
 
   const row = getProfileForTeardown(db, profileId);
   if (!row) {
     throw Object.assign(new Error("not_found"), { status: 404 as const });
   }
 
-  if (!env.vpnSshEnabled) {
+  if (!settings.vpnSshEnabled) {
     return {
       outcome: "dry-run",
       profileRow: row,
@@ -109,7 +111,7 @@ export async function executeProfileTeardown(options: {
         password: sshPassword,
         remoteScript: phase.script,
         timeoutMs: PHASE_TIMEOUT_MS,
-        knownHostsFile: env.sshKnownHostsFile,
+        knownHostsFile: settings.sshKnownHostsFile ?? undefined,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

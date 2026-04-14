@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { decryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
+import { getAppSettings } from "../db/appSettings";
 import {
   buildSetupPhases,
   PLACEHOLDER_ADMIN_PASS,
@@ -24,7 +25,7 @@ export type SetupResult =
   | { mode: "dry-run"; phases: SetupPhaseResult[] }
   | { mode: "live"; phases: SetupPhaseResult[] };
 
-type SetupEnv = Pick<Env, "masterKey" | "vpnSshEnabled" | "acmeEmail" | "sshKnownHostsFile">;
+type SetupEnv = Pick<Env, "masterKey">;
 
 const PHASE_TIMEOUT_MS = 600_000;
 const XUI_LOCAL_PORT = 2053;
@@ -98,6 +99,7 @@ export async function executeProfileSetup(options: {
 }): Promise<ExecuteProfileSetupOutcome> {
   const { db, env, profileId } = options;
   const sshExec = options.sshExec ?? buildSshExecUsingSpawn();
+  const settings = getAppSettings(db);
 
   const row = getProfileForSetup(db, profileId);
   if (!row) {
@@ -112,10 +114,10 @@ export async function executeProfileSetup(options: {
     throw Object.assign(new Error("panel_hostname_required"), { status: 400 as const });
   }
 
-  if (!env.vpnSshEnabled) {
+  if (!settings.vpnSshEnabled) {
     const phases = buildSetupPhases({
       panelHostname: row.panel_hostname,
-      acmeEmail: env.acmeEmail ?? "ops@example.com",
+      acmeEmail: settings.acmeEmail || "ops@example.com",
       xuiLocalPort: XUI_LOCAL_PORT,
       adminUsername: PLACEHOLDER_ADMIN_USER,
       adminPassword: PLACEHOLDER_ADMIN_PASS,
@@ -131,7 +133,7 @@ export async function executeProfileSetup(options: {
     };
   }
 
-  if (!env.acmeEmail) {
+  if (!settings.acmeEmail) {
     throw Object.assign(new Error("acme_email_required"), { status: 400 as const });
   }
 
@@ -147,7 +149,7 @@ export async function executeProfileSetup(options: {
 
   const phases = buildSetupPhases({
     panelHostname: row.panel_hostname,
-    acmeEmail: env.acmeEmail,
+    acmeEmail: settings.acmeEmail,
     xuiLocalPort: XUI_LOCAL_PORT,
     adminUsername,
     adminPassword,
@@ -166,7 +168,7 @@ export async function executeProfileSetup(options: {
         password: sshPassword,
         remoteScript: phase.script,
         timeoutMs: PHASE_TIMEOUT_MS,
-        knownHostsFile: env.sshKnownHostsFile,
+        knownHostsFile: settings.sshKnownHostsFile ?? undefined,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
