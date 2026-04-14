@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, FormEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
+import { isFqdnPanel, isPublicIpLiteral } from "../lib/panelAddress";
 
 const profilesQueryKey = ["profiles"] as const;
 
@@ -54,8 +55,6 @@ const emptyFormValues: ProfileFormValues = {
   sshPassword: "",
 };
 
-const fqdnRe = /^([a-zA-Z0-9](-*[a-zA-Z0-9])*\.)+[a-zA-Z]{2,}$/;
-
 function fetchProfiles() {
   return apiFetch<VpnProfile[]>("/api/profiles");
 }
@@ -65,7 +64,8 @@ function createProfile(payload: {
   host: string;
   sshPort: number;
   sshUser: string;
-  panelHostname: string;
+  /** Omitted when SSH host is a public IP and panel is left empty (server derives). */
+  panelHostname?: string;
   sshPassword: string;
 }) {
   return apiFetch<VpnProfile>("/api/profiles", {
@@ -130,7 +130,11 @@ function getErrorMessage(error: unknown) {
   return "Something went wrong. Please try again.";
 }
 
-function validateFormValues(values: ProfileFormValues, requirePassword: boolean) {
+function validateFormValues(
+  values: ProfileFormValues,
+  requirePassword: boolean,
+  formMode: "create" | "edit",
+) {
   const label = values.label.trim();
   const host = values.host.trim();
   const sshUser = values.sshUser.trim();
@@ -142,12 +146,16 @@ function validateFormValues(values: ProfileFormValues, requirePassword: boolean)
     return { error: "Label, host, and SSH user are required." };
   }
 
-  if (!panelHostname) {
-    return { error: "Panel hostname (FQDN for HTTPS) is required." };
-  }
-
-  if (!fqdnRe.test(panelHostname)) {
-    return { error: "Panel hostname must be a DNS name (e.g. panel.example.com)." };
+  if (panelHostname !== "") {
+    if (!isPublicIpLiteral(panelHostname) && !isFqdnPanel(panelHostname)) {
+      return {
+        error: "Panel address must be a valid FQDN (e.g. panel.example.com) or a public IP address.",
+      };
+    }
+  } else if (!isPublicIpLiteral(host)) {
+    return {
+      error: "Panel address is required unless SSH host is entered as a public IP address.",
+    };
   }
 
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
@@ -158,16 +166,14 @@ function validateFormValues(values: ProfileFormValues, requirePassword: boolean)
     return { error: "SSH password is required for new profiles." };
   }
 
-  return {
-    payload: {
-      label,
-      host,
-      sshPort,
-      sshUser,
-      panelHostname,
-      sshPassword,
-    },
-  };
+  const base = { label, host, sshPort, sshUser, sshPassword };
+  if (panelHostname !== "") {
+    return { payload: { ...base, panelHostname } };
+  }
+  if (formMode === "edit") {
+    return { payload: { ...base, panelHostname: "" } };
+  }
+  return { payload: { ...base } };
 }
 
 function hasValidationError(
@@ -407,10 +413,18 @@ export default function VpnsPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!modalState) {
+      return;
+    }
+
     setFormError(null);
 
-    const requirePassword = modalState?.mode === "create";
-    const result = validateFormValues(formValues, requirePassword);
+    const requirePassword = modalState.mode === "create";
+    const result = validateFormValues(
+      formValues,
+      requirePassword,
+      modalState.mode === "edit" ? "edit" : "create",
+    );
     if (hasValidationError(result)) {
       setFormError(result.error);
       return;
@@ -422,12 +436,13 @@ export default function VpnsPage() {
     }
 
     if (modalState?.mode === "edit") {
+      const pl = result.payload;
       const payload: Parameters<typeof updateProfile>[1] = {
-        label: result.payload.label,
-        host: result.payload.host,
-        sshPort: result.payload.sshPort,
-        sshUser: result.payload.sshUser,
-        panelHostname: result.payload.panelHostname,
+        label: pl.label,
+        host: pl.host,
+        sshPort: pl.sshPort,
+        sshUser: pl.sshUser,
+        panelHostname: "panelHostname" in pl ? pl.panelHostname : "",
       };
 
       if (result.payload.sshPassword !== "") {
@@ -630,15 +645,18 @@ export default function VpnsPage() {
               </label>
 
               <label style={labelStyle}>
-                Panel hostname (FQDN for HTTPS / ACME)
+                Panel address (FQDN or public IP)
                 <input
                   onChange={(event) =>
                     setFormValues((current) => ({ ...current, panelHostname: event.target.value }))
                   }
-                  placeholder="panel.example.com"
+                  placeholder="panel.example.com or 203.0.113.10"
                   style={inputStyle}
                   value={formValues.panelHostname}
                 />
+                <span style={fieldHintStyle}>
+                  Required for HTTPS unless SSH host is a public IP (then you may leave this empty).
+                </span>
               </label>
 
               <div style={formRowStyle}>
@@ -873,6 +891,12 @@ const labelStyle: CSSProperties = {
   gap: "8px",
   fontWeight: 600,
   color: "#111827",
+};
+
+const fieldHintStyle: CSSProperties = {
+  fontWeight: 400,
+  fontSize: "0.85rem",
+  color: "#6b7280",
 };
 
 const inputStyle: CSSProperties = {
