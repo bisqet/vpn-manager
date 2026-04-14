@@ -136,11 +136,11 @@ if (prevDiagramKeyRef.current !== diagramKey) {
 }
 ```
 
-**SVG structure:** stop using `svg.selectAll("*").remove()` on the root. Instead:
+**SVG structure:** each `useLayoutEffect` run:
 
 1. `const svg = d3.select(svgEl);`
-2. If there is no child `<g class="chain-traffic-zoom-root">`, append it once (or recreate each time — see below). **Recommended:** each effect run: `svg.selectAll("*").remove();` then append **`g.chain-traffic-zoom-root`** as the **only** direct child, draw **everything** (empty message, draft-only graph, full graph) inside that `g`. Recreate **`d3.zoom`** each effect **or** store in `zoomBehaviorRef` and re-`svg.call(zoom)` after drawing.
-3. After all drawing into `zoomRoot`, apply:
+2. `svg.selectAll("*").remove();` then append a single **`g.chain-traffic-zoom-root`** (the **`zoomRoot`** selection). Draw **everything** (empty message, draft-only graph, full graph) **inside** that `g` only — no leftover nodes outside it.
+3. After all drawing into `zoomRoot`, create **`d3.zoom`**, store it in **`zoomBehaviorRef`**, and apply:
 
 ```typescript
 const zoom = d3
