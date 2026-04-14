@@ -22,4 +22,10 @@ describe("migrate", () => {
     expect(names).toContain("chain_hop_id");
     expect(names).not.toContain("chain_id");
   });
+
+  test("vpn_profiles has operational_status", () => {
+    migrate(db);
+    const cols = db.query<{ name: string }, []>("PRAGMA table_info(vpn_profiles)").all();
+    expect(cols.map((c) => c.name)).toContain("operational_status");
+  });
 });
