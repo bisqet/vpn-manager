@@ -587,6 +587,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         error.message === PROFILE_IN_USE_ERROR
       ) {
         setPendingForceDeleteId(profile.id);
+        return;
       }
       throw error;
     }
