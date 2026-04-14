@@ -96,3 +96,18 @@ export function httpsUrlHost(panel: string): string {
   }
   return panel;
 }
+
+/**
+ * HTTPS URL for the 3x-ui panel behind Caddy, matching verify curl in setupPhases.
+ * Returns null if hostname or path is missing/blank.
+ */
+export function buildPanelHttpsUrl(panelHostname: string, webBasePath: string | null): string | null {
+  const hostKey = panelHostname.trim();
+  if (!hostKey) return null;
+  if (webBasePath === null) return null;
+  const base = webBasePath.trim();
+  if (base === "") return null;
+  const webPathForUrl = base.startsWith("/") ? base : `/${base}`;
+  const httpsHost = httpsUrlHost(hostKey);
+  return `https://${httpsHost}${webPathForUrl}/`;
+}

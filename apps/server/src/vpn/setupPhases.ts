@@ -1,4 +1,4 @@
-import { caddySiteAddressKey, httpsUrlHost } from "../net/panelAddress";
+import { buildPanelHttpsUrl, caddySiteAddressKey } from "../net/panelAddress";
 
 /**
  * Ordered remote setup phases for 3x-ui + Caddy on Ubuntu 24.
@@ -49,9 +49,9 @@ esac`;
 
 export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
   const { panelHostname, acmeEmail, xuiLocalPort, adminUsername, adminPassword, webBasePath } = ctx;
-  const webPathForUrl = webBasePath.startsWith("/") ? webBasePath : `/${webBasePath}`;
+  const panelHttpsUrl = buildPanelHttpsUrl(panelHostname, webBasePath);
+  if (panelHttpsUrl === null) throw new Error("buildSetupPhases: panelHttpsUrl unexpectedly empty");
   const caddySiteKey = caddySiteAddressKey(panelHostname);
-  const httpsHost = httpsUrlHost(panelHostname);
 
   const preflight: SetupPhase = {
     id: "preflight",
@@ -164,7 +164,7 @@ systemctl is-active --quiet caddy
     script: `set -euo pipefail
 systemctl is-active --quiet ${XUI_SYSTEMD}
 systemctl is-active --quiet caddy
-curl -fsS -g -o /dev/null "https://${httpsHost}${webPathForUrl}/"
+curl -fsS -g -o /dev/null "${panelHttpsUrl}"
 `,
   };
 

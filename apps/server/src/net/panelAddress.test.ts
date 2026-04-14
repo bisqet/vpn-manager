@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildPanelHttpsUrl,
   caddySiteAddressKey,
   httpsUrlHost,
   isPublicIpLiteral,
@@ -49,5 +50,27 @@ describe("caddySiteAddressKey / httpsUrlHost", () => {
     const pub = "2001:4860:4860::8888";
     expect(caddySiteAddressKey(pub)).toBe("[2001:4860:4860::8888]");
     expect(httpsUrlHost(pub)).toBe("[2001:4860:4860::8888]");
+  });
+});
+
+describe("buildPanelHttpsUrl", () => {
+  test("returns null when webBasePath missing", () => {
+    expect(buildPanelHttpsUrl("panel.example.com", null)).toBeNull();
+    expect(buildPanelHttpsUrl("panel.example.com", "")).toBeNull();
+  });
+  test("returns null when panel hostname empty", () => {
+    expect(buildPanelHttpsUrl("", "abc")).toBeNull();
+  });
+  test("FQDN with path without leading slash", () => {
+    expect(buildPanelHttpsUrl("panel.example.com", "myPath")).toBe("https://panel.example.com/myPath/");
+  });
+  test("FQDN with path with leading slash", () => {
+    expect(buildPanelHttpsUrl("panel.example.com", "/myPath")).toBe("https://panel.example.com/myPath/");
+  });
+  test("public IPv4 panel", () => {
+    expect(buildPanelHttpsUrl("203.0.113.5", "xyz")).toBe("https://203.0.113.5/xyz/");
+  });
+  test("public IPv6 panel brackets host", () => {
+    expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p")).toBe("https://[2001:4860:4860::8888]/p/");
   });
 });
