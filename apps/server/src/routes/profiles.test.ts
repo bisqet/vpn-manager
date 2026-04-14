@@ -5,6 +5,7 @@ import { decryptVpnPassword } from "../crypto/vpnSecret";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
+import type { SshExecFn } from "../vpn/sshExec";
 
 type ProfileRow = {
   id: number;
@@ -245,7 +246,7 @@ describe("profilesRoutes", () => {
     });
   });
 
-  test("POST /api/profiles/:id/setup marks profile working", async () => {
+  test("POST /api/profiles/:id/setup returns dry-run when VPN_SSH_ENABLED is false", async () => {
     const app = createApp(db, env);
 
     const createRes = await app.request("/api/profiles", {
@@ -272,13 +273,84 @@ describe("profilesRoutes", () => {
       headers: { Cookie: `${SESSION_COOKIE}=session-token` },
     });
     expect(setupRes.status).toBe(200);
-    const afterSetup = await setupRes.json();
-    expect(afterSetup.operationalStatus).toBe("working");
+    const body = await setupRes.json();
+    expect(body.profile.operationalStatus).toBe("pending");
+    expect(body.setup.mode).toBe("dry-run");
+    expect(body.setup.phases.length).toBeGreaterThanOrEqual(7);
+    expect(body.setup.phases[0].id).toBe("preflight");
 
     const row = db.query<{ operational_status: string }, []>(
       "SELECT operational_status FROM vpn_profiles WHERE id = 1",
     ).get();
+    expect(row?.operational_status).toBe("pending");
+  });
+
+  test("POST /api/profiles/:id/setup live path succeeds with fake ssh", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Live",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+    const body = await setupRes.json();
+    expect(body.setup.mode).toBe("live");
+    expect(body.profile.operationalStatus).toBe("working");
+    const row = db
+      .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
+        "SELECT operational_status, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
     expect(row?.operational_status).toBe("working");
+    expect(row?.xui_web_base_path).toBeTruthy();
+  });
+
+  test("POST /api/profiles/:id/setup returns 409 when already working", async () => {
+    const app = createApp(db, env);
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "W",
+        host: "1.1.1.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "panel.w.example.com",
+      }),
+    });
+    db.query("UPDATE vpn_profiles SET operational_status = 'working' WHERE id = 1").run();
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(409);
   });
 
   test("PATCH runs placeholder verify and sets operationalStatus working", async () => {

@@ -11,9 +11,24 @@ type VpnProfile = {
   host: string;
   sshPort: number;
   sshUser: string;
+  panelHostname: string;
   operationalStatus: "pending" | "working";
   createdAt: string;
   updatedAt: string;
+};
+
+type SetupPhaseDto = {
+  id: string;
+  title: string;
+  script: string;
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+};
+
+type SetupResponse = {
+  profile: VpnProfile;
+  setup: { mode: "dry-run" | "live"; phases: SetupPhaseDto[] };
 };
 
 type ProfileFormValues = {
@@ -21,6 +36,7 @@ type ProfileFormValues = {
   host: string;
   sshPort: string;
   sshUser: string;
+  panelHostname: string;
   sshPassword: string;
 };
 
@@ -34,8 +50,11 @@ const emptyFormValues: ProfileFormValues = {
   host: "",
   sshPort: "22",
   sshUser: "",
+  panelHostname: "",
   sshPassword: "",
 };
+
+const fqdnRe = /^([a-zA-Z0-9](-*[a-zA-Z0-9])*\.)+[a-zA-Z]{2,}$/;
 
 function fetchProfiles() {
   return apiFetch<VpnProfile[]>("/api/profiles");
@@ -46,6 +65,7 @@ function createProfile(payload: {
   host: string;
   sshPort: number;
   sshUser: string;
+  panelHostname: string;
   sshPassword: string;
 }) {
   return apiFetch<VpnProfile>("/api/profiles", {
@@ -61,6 +81,7 @@ function updateProfile(
     host: string;
     sshPort: number;
     sshUser: string;
+    panelHostname?: string;
     sshPassword?: string;
   },
 ) {
@@ -77,7 +98,7 @@ function deleteProfile(id: number) {
 }
 
 function setupProfile(id: number) {
-  return apiFetch<VpnProfile>(`/api/profiles/${id}/setup`, {
+  return apiFetch<SetupResponse>(`/api/profiles/${id}/setup`, {
     method: "POST",
   });
 }
@@ -92,6 +113,7 @@ function getInitialValues(modalState: ModalState): ProfileFormValues {
     host: modalState.profile.host,
     sshPort: String(modalState.profile.sshPort),
     sshUser: modalState.profile.sshUser,
+    panelHostname: modalState.profile.panelHostname,
     sshPassword: "",
   };
 }
@@ -112,11 +134,20 @@ function validateFormValues(values: ProfileFormValues, requirePassword: boolean)
   const label = values.label.trim();
   const host = values.host.trim();
   const sshUser = values.sshUser.trim();
+  const panelHostname = values.panelHostname.trim();
   const sshPassword = values.sshPassword.trim();
   const sshPort = Number(values.sshPort);
 
   if (!label || !host || !sshUser) {
     return { error: "Label, host, and SSH user are required." };
+  }
+
+  if (!panelHostname) {
+    return { error: "Panel hostname (FQDN for HTTPS) is required." };
+  }
+
+  if (!fqdnRe.test(panelHostname)) {
+    return { error: "Panel hostname must be a DNS name (e.g. panel.example.com)." };
   }
 
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
@@ -133,6 +164,7 @@ function validateFormValues(values: ProfileFormValues, requirePassword: boolean)
       host,
       sshPort,
       sshUser,
+      panelHostname,
       sshPassword,
     },
   };
@@ -142,6 +174,81 @@ function hasValidationError(
   result: ReturnType<typeof validateFormValues>,
 ): result is { error: string } {
   return "error" in result;
+}
+
+type SetupSheetProps = {
+  profile: VpnProfile;
+  setup: SetupResponse["setup"];
+  onClose: () => void;
+};
+
+function SetupOutputSheet({ profile, setup, onClose }: SetupSheetProps) {
+  const titleId = "setup-sheet-title";
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div style={sshBackdropStyle} role="presentation" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={{ ...sshSheetStyle, maxHeight: "min(72vh, 720px)", height: "auto" }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={sshSheetHeaderStyle}>
+          <h3 id={titleId} style={sshSheetTitleStyle}>
+            Setup — {profile.label} ({setup.mode === "dry-run" ? "dry-run" : "live"})
+          </h3>
+          <button onClick={onClose} style={modalCloseButtonStyle} type="button">
+            Close
+          </button>
+        </div>
+        <div style={{ ...sshTerminalStyle, height: "min(60vh, 560px)", cursor: "default" }} tabIndex={0}>
+          <div style={{ ...sshTerminalLineStyle, marginBottom: "12px", opacity: 0.85 }}>
+            # Output from the VPN Manager API. This is not an interactive SSH session in your browser.
+          </div>
+          {setup.phases.map((phase) => (
+            <div key={phase.id} style={{ marginBottom: "20px" }}>
+              <div style={{ ...sshTerminalLineStyle, color: "#94a3b8" }}># {phase.title}</div>
+              <pre style={{ ...sshTerminalLineStyle, margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{phase.script}</pre>
+              {phase.stdout !== undefined && phase.stdout !== "" ? (
+                <pre style={{ ...sshTerminalLineStyle, marginTop: "8px", color: "#86efac", whiteSpace: "pre-wrap" }}>
+                  {phase.stdout}
+                </pre>
+              ) : null}
+              {phase.stderr !== undefined && phase.stderr !== "" ? (
+                <pre style={{ ...sshTerminalLineStyle, marginTop: "8px", color: "#fca5a5", whiteSpace: "pre-wrap" }}>
+                  {phase.stderr}
+                </pre>
+              ) : null}
+              {phase.code !== undefined ? (
+                <div style={{ ...sshTerminalLineStyle, marginTop: "4px", color: "#cbd5e1" }}>
+                  exit: {phase.code}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type SshTerminalSheetProps = {
@@ -250,6 +357,7 @@ export default function VpnsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [setupActionError, setSetupActionError] = useState<string | null>(null);
   const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
+  const [setupSheet, setSetupSheet] = useState<{ profile: VpnProfile; setup: SetupResponse["setup"] } | null>(null);
 
   useEffect(() => {
     setFormValues(getInitialValues(modalState));
@@ -278,13 +386,15 @@ export default function VpnsPage() {
     onSuccess: async (_, deletedId) => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
       setSshProfile((current) => (current?.id === deletedId ? null : current));
+      setSetupSheet((current) => (current?.profile.id === deletedId ? null : current));
     },
   });
 
   const setupMutation = useMutation({
     mutationFn: setupProfile,
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+      setSetupSheet({ profile: data.profile, setup: data.setup });
     },
   });
 
@@ -317,6 +427,7 @@ export default function VpnsPage() {
         host: result.payload.host,
         sshPort: result.payload.sshPort,
         sshUser: result.payload.sshUser,
+        panelHostname: result.payload.panelHostname,
       };
 
       if (result.payload.sshPassword !== "") {
@@ -343,6 +454,15 @@ export default function VpnsPage() {
     try {
       await setupMutation.mutateAsync(profile.id);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 500) {
+        const body = error.body as { profile?: VpnProfile; setup?: SetupResponse["setup"] };
+        if (body?.profile && body?.setup) {
+          setSetupSheet({ profile: body.profile, setup: body.setup });
+          await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+          setSetupActionError(null);
+          return;
+        }
+      }
       setSetupActionError(getErrorMessage(error));
     }
   }
@@ -390,6 +510,7 @@ export default function VpnsPage() {
                 <tr>
                   <th style={tableHeadCellStyle}>Label</th>
                   <th style={tableHeadCellStyle}>Host</th>
+                  <th style={tableHeadCellStyle}>Panel host</th>
                   <th style={tableHeadCellStyle}>SSH port</th>
                   <th style={tableHeadCellStyle}>User</th>
                   <th style={tableHeadCellStyle}>Status</th>
@@ -408,6 +529,7 @@ export default function VpnsPage() {
                     <tr key={profile.id}>
                       <td style={tableBodyCellStyle}>{profile.label}</td>
                       <td style={tableBodyCellStyle}>{profile.host}</td>
+                      <td style={tableBodyCellStyle}>{profile.panelHostname}</td>
                       <td style={tableBodyCellStyle}>{profile.sshPort}</td>
                       <td style={tableBodyCellStyle}>{profile.sshUser}</td>
                       <td style={tableBodyCellStyle}>
@@ -507,6 +629,18 @@ export default function VpnsPage() {
                 />
               </label>
 
+              <label style={labelStyle}>
+                Panel hostname (FQDN for HTTPS / ACME)
+                <input
+                  onChange={(event) =>
+                    setFormValues((current) => ({ ...current, panelHostname: event.target.value }))
+                  }
+                  placeholder="panel.example.com"
+                  style={inputStyle}
+                  value={formValues.panelHostname}
+                />
+              </label>
+
               <div style={formRowStyle}>
                 <label style={labelStyle}>
                   SSH port
@@ -559,6 +693,13 @@ export default function VpnsPage() {
         </div>
       ) : null}
 
+      {setupSheet ? (
+        <SetupOutputSheet
+          profile={setupSheet.profile}
+          setup={setupSheet.setup}
+          onClose={() => setSetupSheet(null)}
+        />
+      ) : null}
       {sshProfile ? <SshTerminalSheet profile={sshProfile} onClose={() => setSshProfile(null)} /> : null}
     </>
   );

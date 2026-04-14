@@ -4,7 +4,9 @@ import { Hono } from "hono";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
-import { simulateSetupWork, verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
+import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
+import { executeProfileSetup } from "../vpn/setupRunner";
+import type { SshExecFn } from "../vpn/sshExec";
 
 type VpnProfileRow = {
   id: number;
@@ -23,7 +25,11 @@ type VpnProfileSecretRow = VpnProfileRow & {
   ssh_password_nonce: Uint8Array;
 };
 
-type ProfilesEnv = Pick<Env, "masterKey">;
+type ProfilesEnv = Pick<Env, "masterKey" | "vpnSshEnabled" | "acmeEmail" | "sshKnownHostsFile">;
+
+export type ProfilesRoutesOptions = {
+  sshExec?: SshExecFn;
+};
 
 function toProfileDto(row: VpnProfileRow) {
   return {
@@ -79,7 +85,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
   );
 }
 
-export function profilesRoutes(db: Database, env: ProfilesEnv) {
+export function profilesRoutes(db: Database, env: ProfilesEnv, options: ProfilesRoutesOptions = {}) {
   const app = new Hono();
 
   app.get("/", (c) => {
@@ -142,15 +148,63 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
       return c.json({ error: "Profile not found" }, 404);
     }
 
-    await simulateSetupWork();
-    const status = await verifyProfileHealthPlaceholder();
+    try {
+      const result = await executeProfileSetup({
+        db,
+        env,
+        profileId: id,
+        sshExec: options.sshExec,
+      });
 
-    db.query(
-      "UPDATE vpn_profiles SET operational_status = ?, updated_at = datetime('now') WHERE id = ?",
-    ).run(status, id);
+      if (result.outcome === "dry-run") {
+        return c.json({
+          profile: toProfileDto(result.profileRow as VpnProfileRow),
+          setup: result.setup,
+        });
+      }
 
-    const updated = getProfileById(db, id);
-    return c.json(toProfileDto(updated!));
+      if (result.outcome === "live-failed") {
+        return c.json(
+          {
+            error: "VPN setup failed",
+            profile: toProfileDto(result.profileRow as VpnProfileRow),
+            setup: result.setup,
+          },
+          500,
+        );
+      }
+
+      return c.json({
+        profile: toProfileDto(result.profileRow as VpnProfileRow),
+        setup: result.setup,
+      });
+    } catch (e: unknown) {
+      const err = e as { status?: number; message?: string };
+      if (err.status === 409) {
+        return c.json({ error: "Profile is already set up (working). Reset is not available yet." }, 409);
+      }
+      if (err.status === 400) {
+        if (err.message === "panel_hostname_required") {
+          return c.json({ error: "panelHostname is required before setup" }, 400);
+        }
+        if (err.message === "acme_email_required") {
+          return c.json(
+            { error: "ACME_EMAIL is required on the server when VPN_SSH_ENABLED is true" },
+            400,
+          );
+        }
+      }
+      if (err.status === 503) {
+        return c.json(
+          {
+            error:
+              "sshpass is required on the VPN Manager host for SSH password authentication (install the sshpass package)",
+          },
+          503,
+        );
+      }
+      throw e;
+    }
   });
 
   app.patch("/:id", async (c) => {
