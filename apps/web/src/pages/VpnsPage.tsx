@@ -522,12 +522,235 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
   );
 }
 
+type SetupTerminalSheetProps = {
+  profile: VpnProfile;
+  onClose: () => void;
+  onRunFinished: () => void;
+};
+
+function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSheetProps) {
+  const queryClient = useQueryClient();
+  const titleId = "setup-terminal-sheet-title";
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const [disconnected, setDisconnected] = useState(false);
+  const [disconnectHint, setDisconnectHint] = useState<string | null>(null);
+  const [runFinished, setRunFinished] = useState(false);
+  const runFinishedRef = useRef(false);
+  const socketRef = useRef<WebSocket | null>(null);
+  const onRunFinishedRef = useRef(onRunFinished);
+  onRunFinishedRef.current = onRunFinished;
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (terminalContainerRef.current?.contains(e.target as Node)) {
+          return;
+        }
+        const socket = socketRef.current;
+        if (socket && socket.readyState === WebSocket.OPEN && !runFinishedRef.current) {
+          const proceed = window.confirm(
+            "Setup is still running. OK = continue in background, Cancel = stop setup",
+          );
+          if (proceed) {
+            socket.close(4401, "detach");
+          } else {
+            socket.close(4400, "cancel");
+          }
+          return;
+        }
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    const container = terminalContainerRef.current;
+    if (!container) return;
+
+    setDisconnected(false);
+    setDisconnectHint(null);
+    setRunFinished(false);
+    runFinishedRef.current = false;
+
+    let ws: WebSocket | undefined;
+    let terminal: Terminal | undefined;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let resizeObserver: ResizeObserver | undefined;
+
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/profiles/${profile.id}/setup-terminal`;
+    const socket = new WebSocket(wsUrl);
+    ws = socket;
+    socketRef.current = socket;
+    socket.binaryType = "arraybuffer";
+
+    const term = new Terminal({ cursorBlink: true });
+    terminal = term;
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(container);
+    fitAddon.fit();
+
+    // Viewer-only: keystrokes are not forwarded to the server.
+    // Resize events are the only client→server messages.
+
+    socket.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const msg = JSON.parse(event.data) as { type?: string; outcome?: string };
+          if (msg.type === "setupComplete") {
+            runFinishedRef.current = true;
+            setRunFinished(true);
+            onRunFinishedRef.current();
+            void queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+          }
+        } catch {
+          // not a JSON control message — ignore
+        }
+      } else {
+        term.write(new Uint8Array(event.data as ArrayBuffer));
+      }
+    };
+
+    socket.onclose = (ev) => {
+      socketRef.current = null;
+      if (ev.code !== 1000 && ev.code !== 4400 && ev.code !== 4401) {
+        const reason = (ev.reason ?? "").trim();
+        if (reason) {
+          setDisconnectHint(
+            ev.code === 1011
+              ? `The API could not complete SSH to this profile's host: ${reason}`
+              : reason,
+          );
+        } else {
+          setDisconnectHint(
+            "Connection closed before setup finished. For dev: run the API on port 3000 and ensure Vite proxies WebSockets. On the server: set VPN_SSH_ENABLED=true in apps/server/.env and restart.",
+          );
+        }
+      }
+      setDisconnected(true);
+    };
+
+    socket.onerror = () => {
+      setDisconnectHint(
+        "WebSocket error (often the API is down, VPN_SSH_ENABLED is false, or the dev proxy is not upgrading WS). Check the browser network tab.",
+      );
+      setDisconnected(true);
+    };
+
+    term.onResize(({ cols, rows }) => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
+      }, 100);
+    });
+
+    resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+    });
+    resizeObserver.observe(container);
+
+    return () => {
+      clearTimeout(resizeTimer);
+      resizeObserver?.disconnect();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+      terminal?.dispose();
+      socketRef.current = null;
+    };
+  }, [profile.id, queryClient]);
+
+  function handleRequestClose() {
+    const socket = socketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN && !runFinishedRef.current) {
+      const proceed = window.confirm(
+        "Setup is still running. OK = continue in background, Cancel = stop setup",
+      );
+      if (proceed) {
+        socket.close(4401, "detach");
+      } else {
+        socket.close(4400, "cancel");
+      }
+      return;
+    }
+    onClose();
+  }
+
+  return (
+    <div style={sshBackdropStyle} role="presentation" onClick={handleRequestClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={sshSheetStyle}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={sshSheetHeaderStyle}>
+          <h3 id={titleId} style={sshSheetTitleStyle}>
+            Setup — {profile.label}
+          </h3>
+          <button onClick={handleRequestClose} style={modalCloseButtonStyle} type="button">
+            Close
+          </button>
+        </div>
+        <div style={sshTerminalWrapperStyle}>
+          <div ref={terminalContainerRef} style={sshXtermContainerStyle} />
+          {disconnected ? (
+            <div style={sshDisconnectedOverlayStyle}>
+              <span>{runFinished ? "Setup complete" : "Disconnected"}</span>
+              {disconnectHint ? (
+                <p
+                  style={{ margin: "8px 0 0", maxWidth: "420px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
+                >
+                  {disconnectHint}
+                </p>
+              ) : null}
+              <button onClick={onClose} style={primaryButtonStyle} type="button">
+                {runFinished ? "Done" : "Close"}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const queryClient = useQueryClient();
   const profilesQuery = useQuery({
     queryKey: profilesQueryKey,
     queryFn: fetchProfiles,
   });
+
+  const preflightQuery = useQuery({
+    queryKey: ["profiles", "ssh-terminal-preflight"] as const,
+    queryFn: async () => {
+      const res = await fetch("/api/profiles/ssh-terminal/preflight", {
+        credentials: "include",
+      });
+      if (!res.ok) return false;
+      const body = (await res.json().catch(() => null)) as {
+        sshTerminalEnabled?: boolean;
+      } | null;
+      return body?.sshTerminalEnabled ?? false;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const sshTerminalEnabled = preflightQuery.data ?? false;
 
   const [modalState, setModalState] = useState<ModalState>(null);
   const [formValues, setFormValues] = useState<ProfileFormValues>(emptyFormValues);
@@ -540,6 +763,8 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const [panelLoginBusyById, setPanelLoginBusyById] = useState<Record<number, number>>({});
   const panelLoginCache = useRef(new Map<number, PanelLoginResponse>());
   const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
+  const [setupTerminalProfile, setSetupTerminalProfile] = useState<VpnProfile | null>(null);
+  const [setupTerminalRunFinished, setSetupTerminalRunFinished] = useState(false);
   const [setupSheet, setSetupSheet] = useState<{
     profile: VpnProfile;
     setup: SetupResponse["setup"];
@@ -583,6 +808,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
       await queryClient.invalidateQueries({ queryKey: ["chains"] });
       setSshProfile((current) => (current?.id === variables.id ? null : current));
       setSetupSheet((current) => (current?.profile.id === variables.id ? null : current));
+      setSetupTerminalProfile((current) => (current?.id === variables.id ? null : current));
       setPendingForceDeleteId(null);
     },
   });
@@ -741,6 +967,11 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   }
 
   async function handleSetup(profile: VpnProfile) {
+    if (sshTerminalEnabled) {
+      setSetupTerminalProfile(profile);
+      setSetupTerminalRunFinished(false);
+      return;
+    }
     setSetupActionError(null);
     try {
       await setupMutation.mutateAsync(profile.id);
@@ -874,7 +1105,9 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                   const deleteDisabled = isDeleting && deleteMutation.variables?.id === profile.id;
                   const editDisabled =
                     isSaving || (isDeleting && deleteMutation.variables?.id === profile.id);
-                  const setupBusy = setupMutation.isPending && setupMutation.variables === profile.id;
+                  const setupBusy =
+                    (setupMutation.isPending && setupMutation.variables === profile.id) ||
+                    (setupTerminalProfile?.id === profile.id && !setupTerminalRunFinished);
                   const panelLoginBusy = (panelLoginBusyById[profile.id] ?? 0) > 0;
 
                   return (
@@ -1128,6 +1361,16 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         />
       ) : null}
       {sshProfile ? <SshTerminalSheet profile={sshProfile} onClose={() => setSshProfile(null)} /> : null}
+      {setupTerminalProfile ? (
+        <SetupTerminalSheet
+          profile={setupTerminalProfile}
+          onClose={() => {
+            setSetupTerminalProfile(null);
+            setSetupTerminalRunFinished(false);
+          }}
+          onRunFinished={() => setSetupTerminalRunFinished(true)}
+        />
+      ) : null}
     </>
   );
 }
