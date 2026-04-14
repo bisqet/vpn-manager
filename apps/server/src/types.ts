@@ -22,7 +22,7 @@ export const vpnProfileUpdate = z.object({
   sshPort: z.number().int().min(1).max(65535).optional(),
   sshUser: z.string().min(1).optional(),
   sshPassword: z.string().min(1).optional(),
-  /** Send empty string to clear to derived-from-host when host is a public IP. */
+  /** Send empty string to clear to derived-from-host when IP or Host is a public IP. */
   panelHostname: z.string().optional(),
 });
 

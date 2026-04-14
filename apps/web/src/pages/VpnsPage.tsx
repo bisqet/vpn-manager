@@ -143,7 +143,7 @@ function validateFormValues(
   const sshPort = Number(values.sshPort);
 
   if (!label || !host || !sshUser) {
-    return { error: "Label, host, and SSH user are required." };
+    return { error: "Label, IP or Host, and SSH user are required." };
   }
 
   if (panelHostname !== "") {
@@ -154,7 +154,7 @@ function validateFormValues(
     }
   } else if (!isPublicIpLiteral(host)) {
     return {
-      error: "Panel address is required unless SSH host is entered as a public IP address.",
+      error: "Panel address is required unless IP or Host is entered as a public IP address.",
     };
   }
 
@@ -524,8 +524,7 @@ export default function VpnsPage() {
               <thead>
                 <tr>
                   <th style={tableHeadCellStyle}>Label</th>
-                  <th style={tableHeadCellStyle}>Host</th>
-                  <th style={tableHeadCellStyle}>Panel host</th>
+                  <th style={tableHeadCellStyle}>IP or Host</th>
                   <th style={tableHeadCellStyle}>SSH port</th>
                   <th style={tableHeadCellStyle}>User</th>
                   <th style={tableHeadCellStyle}>Status</th>
@@ -544,7 +543,6 @@ export default function VpnsPage() {
                     <tr key={profile.id}>
                       <td style={tableBodyCellStyle}>{profile.label}</td>
                       <td style={tableBodyCellStyle}>{profile.host}</td>
-                      <td style={tableBodyCellStyle}>{profile.panelHostname}</td>
                       <td style={tableBodyCellStyle}>{profile.sshPort}</td>
                       <td style={tableBodyCellStyle}>{profile.sshUser}</td>
                       <td style={tableBodyCellStyle}>
@@ -634,7 +632,7 @@ export default function VpnsPage() {
               </label>
 
               <label style={labelStyle}>
-                Host
+                IP or Host
                 <input
                   onChange={(event) =>
                     setFormValues((current) => ({ ...current, host: event.target.value }))
@@ -655,7 +653,7 @@ export default function VpnsPage() {
                   value={formValues.panelHostname}
                 />
                 <span style={fieldHintStyle}>
-                  Required for HTTPS unless SSH host is a public IP (then you may leave this empty).
+                  Required for HTTPS unless IP or Host is a public IP (then you may leave this empty).
                 </span>
               </label>
 

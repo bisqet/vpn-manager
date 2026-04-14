@@ -75,7 +75,7 @@ export function resolvePanelHostname(input: { host: string; panel: string }): Re
   if (isPublicIpLiteral(h)) return { ok: true, panel: normalizeIpLiteral(h) };
   return {
     ok: false,
-    message: "panelHostname is required unless host is a public IP address.",
+    message: "panelHostname is required unless IP or Host is a public IP address.",
   };
 }
 
