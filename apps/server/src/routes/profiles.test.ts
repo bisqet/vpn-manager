@@ -142,6 +142,7 @@ describe("profilesRoutes", () => {
       sshUser: "root",
       panelHostname: "panel.vpn.example.com",
       operationalStatus: "pending",
+      lastSetupError: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
@@ -190,6 +191,7 @@ describe("profilesRoutes", () => {
       sshUser: "root",
       panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
+      lastSetupError: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
@@ -224,6 +226,7 @@ describe("profilesRoutes", () => {
       sshUser: "root",
       panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
+      lastSetupError: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });

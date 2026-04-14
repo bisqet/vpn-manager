@@ -17,6 +17,7 @@ type VpnProfile = {
   sshUser: string;
   panelHostname: string;
   operationalStatus: "pending" | "working";
+  lastSetupError: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -33,6 +34,11 @@ type SetupPhaseDto = {
 type SetupResponse = {
   profile: VpnProfile;
   setup: { mode: "dry-run" | "live"; phases: SetupPhaseDto[] };
+};
+
+type ClearServerResponse = {
+  profile: VpnProfile;
+  teardown: SetupResponse["setup"];
 };
 
 type ProfileFormValues = {
@@ -105,6 +111,12 @@ function deleteProfile(id: number, options?: { force?: boolean }) {
 
 function setupProfile(id: number) {
   return apiFetch<SetupResponse>(`/api/profiles/${id}/setup`, {
+    method: "POST",
+  });
+}
+
+function clearServerFromProfile(id: number) {
+  return apiFetch<ClearServerResponse>(`/api/profiles/${id}/clear-server`, {
     method: "POST",
   });
 }
@@ -191,11 +203,13 @@ function hasValidationError(
 type SetupSheetProps = {
   profile: VpnProfile;
   setup: SetupResponse["setup"];
+  sheetKind?: "setup" | "clear";
   onClose: () => void;
 };
 
-function SetupOutputSheet({ profile, setup, onClose }: SetupSheetProps) {
+function SetupOutputSheet({ profile, setup, sheetKind = "setup", onClose }: SetupSheetProps) {
   const titleId = "setup-sheet-title";
+  const titleVerb = sheetKind === "clear" ? "Clear server" : "Setup";
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -226,7 +240,7 @@ function SetupOutputSheet({ profile, setup, onClose }: SetupSheetProps) {
       >
         <div style={sshSheetHeaderStyle}>
           <h3 id={titleId} style={sshSheetTitleStyle}>
-            Setup — {profile.label} ({setup.mode === "dry-run" ? "dry-run" : "live"})
+            {titleVerb} — {profile.label} ({setup.mode === "dry-run" ? "dry-run" : "live"})
           </h3>
           <button onClick={onClose} style={modalCloseButtonStyle} type="button">
             Close
@@ -473,13 +487,24 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const [formValues, setFormValues] = useState<ProfileFormValues>(emptyFormValues);
   const [formError, setFormError] = useState<string | null>(null);
   const [setupActionError, setSetupActionError] = useState<string | null>(null);
+  const [clearServerActionError, setClearServerActionError] = useState<string | null>(null);
   const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
-  const [setupSheet, setSetupSheet] = useState<{ profile: VpnProfile; setup: SetupResponse["setup"] } | null>(null);
+  const [setupSheet, setSetupSheet] = useState<{
+    profile: VpnProfile;
+    setup: SetupResponse["setup"];
+    sheetKind?: "setup" | "clear";
+  } | null>(null);
   const [pendingForceDeleteId, setPendingForceDeleteId] = useState<number | null>(null);
 
   useEffect(() => {
     setFormValues(getInitialValues(modalState));
     setFormError(null);
+  }, [modalState]);
+
+  useEffect(() => {
+    if (modalState !== null) {
+      setClearServerActionError(null);
+    }
   }, [modalState]);
 
   const createMutation = useMutation({
@@ -515,7 +540,20 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
     mutationFn: setupProfile,
     onSuccess: async (data) => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
-      setSetupSheet({ profile: data.profile, setup: data.setup });
+      setSetupSheet({ profile: data.profile, setup: data.setup, sheetKind: "setup" });
+    },
+  });
+
+  const clearServerMutation = useMutation({
+    mutationFn: clearServerFromProfile,
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+      setSetupSheet({ profile: data.profile, setup: data.teardown, sheetKind: "clear" });
+      setModalState((prev) =>
+        prev?.mode === "edit" && prev.profile.id === data.profile.id
+          ? { ...prev, profile: data.profile }
+          : prev,
+      );
     },
   });
 
@@ -615,13 +653,47 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
       if (error instanceof ApiError && error.status === 500) {
         const body = error.body as { profile?: VpnProfile; setup?: SetupResponse["setup"] };
         if (body?.profile && body?.setup) {
-          setSetupSheet({ profile: body.profile, setup: body.setup });
+          setSetupSheet({ profile: body.profile, setup: body.setup, sheetKind: "setup" });
           await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
           setSetupActionError(null);
           return;
         }
       }
       setSetupActionError(getErrorMessage(error));
+    }
+  }
+
+  async function handleClearServerClick() {
+    if (modalState?.mode !== "edit") {
+      return;
+    }
+    if (
+      !window.confirm(
+        "Remove 3x-ui and the Caddy HTTPS admin panel from this server until you run Setup again? Firewall (UFW) rules on the host are not changed. This is meant for a clean reinstall of the panel stack.",
+      )
+    ) {
+      return;
+    }
+    setClearServerActionError(null);
+    try {
+      await clearServerMutation.mutateAsync(modalState.profile.id);
+      setClearServerActionError(null);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 500) {
+        const body = error.body as { profile?: VpnProfile; teardown?: SetupResponse["setup"] };
+        if (body?.profile && body?.teardown) {
+          setSetupSheet({ profile: body.profile, setup: body.teardown, sheetKind: "clear" });
+          await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+          setModalState((prev) =>
+            prev?.mode === "edit" && prev.profile.id === body.profile!.id
+              ? { ...prev, profile: body.profile! }
+              : prev,
+          );
+          setClearServerActionError(null);
+          return;
+        }
+      }
+      setClearServerActionError(getErrorMessage(error));
     }
   }
 
@@ -672,6 +744,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
           </div>
         ) : null}
         {setupActionError ? <div style={errorStyle}>{setupActionError}</div> : null}
+        {clearServerActionError ? <div style={errorStyle}>{clearServerActionError}</div> : null}
 
         {profilesQuery.isPending ? (
           <div style={emptyStateStyle}>Loading profiles...</div>
@@ -857,6 +930,22 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                 />
               </label>
 
+              {modalState.mode === "edit" &&
+              (modalState.profile.operationalStatus === "working" ||
+                (modalState.profile.operationalStatus === "pending" &&
+                  Boolean(modalState.profile.lastSetupError?.trim()))) ? (
+                <div style={{ marginTop: "4px" }}>
+                  <button
+                    disabled={isSaving || clearServerMutation.isPending || !authUser}
+                    onClick={() => void handleClearServerClick()}
+                    style={dangerButtonStyle}
+                    type="button"
+                  >
+                    {clearServerMutation.isPending ? "Clearing..." : "Clear server from VPN services"}
+                  </button>
+                </div>
+              ) : null}
+
               {formError ? <div style={errorStyle}>{formError}</div> : null}
 
               <div style={modalActionsStyle}>
@@ -876,6 +965,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         <SetupOutputSheet
           profile={setupSheet.profile}
           setup={setupSheet.setup}
+          sheetKind={setupSheet.sheetKind}
           onClose={() => setSetupSheet(null)}
         />
       ) : null}

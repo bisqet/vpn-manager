@@ -25,6 +25,7 @@ type VpnProfileRow = {
   ssh_user: string;
   operational_status: string;
   panel_hostname: string;
+  last_setup_error: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -50,6 +51,7 @@ function toProfileDto(row: VpnProfileRow) {
     sshUser: row.ssh_user,
     panelHostname: row.panel_hostname,
     operationalStatus: row.operational_status as "pending" | "working",
+    lastSetupError: row.last_setup_error ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -84,6 +86,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           ssh_user,
           operational_status,
           panel_hostname,
+          last_setup_error,
           ssh_password_ciphertext,
           ssh_password_nonce,
           created_at,
@@ -110,6 +113,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           ssh_user,
           operational_status,
           panel_hostname,
+          last_setup_error,
           created_at,
           updated_at
         FROM vpn_profiles
