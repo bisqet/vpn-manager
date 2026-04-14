@@ -349,6 +349,7 @@ describe("profilesRoutes", () => {
       headers: { Cookie: `${SESSION_COOKIE}=session-token` },
     });
     expect(forceRes.status).toBe(200);
+    expect(await forceRes.json()).toEqual({ ok: true });
 
     expect(db.query("SELECT id FROM vpn_profiles WHERE id = ?").get(1)).toBeNull();
     expect(db.query("SELECT id FROM chain_hops WHERE chain_id = ?").all(1)).toEqual([]);
