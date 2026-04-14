@@ -58,6 +58,8 @@ const emptyFormValues: ProfileFormValues = {
   sshPassword: "",
 };
 
+const PROFILE_IN_USE_ERROR = "Profile is in use by one or more chain hops";
+
 function fetchProfiles() {
   return apiFetch<VpnProfile[]>("/api/profiles");
 }
@@ -94,8 +96,9 @@ function updateProfile(
   });
 }
 
-function deleteProfile(id: number) {
-  return apiFetch<{ ok: true }>(`/api/profiles/${id}`, {
+function deleteProfile(id: number, options?: { force?: boolean }) {
+  const q = options?.force ? "?force=true" : "";
+  return apiFetch<{ ok: true }>(`/api/profiles/${id}${q}`, {
     method: "DELETE",
   });
 }
@@ -297,74 +300,123 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
     const container = terminalContainerRef.current;
     if (!container) return;
 
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/profiles/${profile.id}/ssh`;
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
-
-    const terminal = new Terminal({ cursorBlink: true });
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(container);
-    fitAddon.fit();
-
     setDisconnected(false);
     setDisconnectHint(null);
 
-    const encoder = new TextEncoder();
-    terminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(encoder.encode(data));
-      }
-    });
-
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        try {
-          JSON.parse(event.data);
-        } catch {
-          // not a JSON control message — ignore
-        }
-      } else {
-        terminal.write(new Uint8Array(event.data as ArrayBuffer));
-      }
-    };
-
-    ws.onclose = (ev) => {
-      if (ev.code !== 1000) {
-        setDisconnectHint(
-          "Connection closed before the terminal started. For dev: run the API on port 3000 and ensure Vite proxies WebSockets. On the server: set VPN_SSH_ENABLED=true in apps/server/.env and restart.",
-        );
-      }
-      setDisconnected(true);
-    };
-    ws.onerror = () => {
-      setDisconnectHint(
-        "WebSocket error (often the API is down, VPN_SSH_ENABLED is false, or the dev proxy is not upgrading WS). Check the browser network tab.",
-      );
-      setDisconnected(true);
-    };
-
+    let cancelled = false;
+    let ws: WebSocket | undefined;
+    let terminal: Terminal | undefined;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-    terminal.onResize(({ cols, rows }) => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols, rows }));
-        }
-      }, 100);
-    });
+    let resizeObserver: ResizeObserver | undefined;
 
-    const resizeObserver = new ResizeObserver(() => {
+    void (async () => {
+      const preRes = await fetch("/api/profiles/ssh-terminal/preflight", {
+        credentials: "include",
+      });
+      const preBody = (await preRes.json().catch(() => null)) as {
+        sshTerminalEnabled?: boolean;
+        error?: string;
+      } | null;
+
+      if (cancelled) return;
+
+      if (!preRes.ok || !preBody) {
+        const hint =
+          preRes.status === 401
+            ? "Sign in to use the browser SSH terminal."
+            : typeof preBody?.error === "string"
+              ? preBody.error
+              : `Could not reach the API (HTTP ${preRes.status}). For dev, run the API on port 3000.`;
+        setDisconnectHint(hint);
+        setDisconnected(true);
+        return;
+      }
+
+      if (!preBody.sshTerminalEnabled) {
+        setDisconnectHint(
+          "SSH is disabled on this server. Set VPN_SSH_ENABLED=true in apps/server/.env and restart the API.",
+        );
+        setDisconnected(true);
+        return;
+      }
+
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProtocol}//${window.location.host}/api/profiles/${profile.id}/ssh`;
+      const socket = new WebSocket(wsUrl);
+      ws = socket;
+      socket.binaryType = "arraybuffer";
+
+      const term = new Terminal({ cursorBlink: true });
+      terminal = term;
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(container);
       fitAddon.fit();
-    });
-    resizeObserver.observe(container);
+
+      const encoder = new TextEncoder();
+      term.onData((data) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(encoder.encode(data));
+        }
+      });
+
+      socket.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          try {
+            JSON.parse(event.data);
+          } catch {
+            // not a JSON control message — ignore
+          }
+        } else {
+          term.write(new Uint8Array(event.data as ArrayBuffer));
+        }
+      };
+
+      socket.onclose = (ev) => {
+        if (ev.code !== 1000) {
+          const reason = (ev.reason ?? "").trim();
+          if (reason) {
+            setDisconnectHint(
+              ev.code === 1011
+                ? `The API could not complete SSH to this profile's host: ${reason}`
+                : reason,
+            );
+          } else {
+            setDisconnectHint(
+              "Connection closed before the terminal started. For dev: run the API on port 3000 and ensure Vite proxies WebSockets. On the server: set VPN_SSH_ENABLED=true in apps/server/.env and restart.",
+            );
+          }
+        }
+        setDisconnected(true);
+      };
+      socket.onerror = () => {
+        setDisconnectHint(
+          "WebSocket error (often the API is down, VPN_SSH_ENABLED is false, or the dev proxy is not upgrading WS). Check the browser network tab.",
+        );
+        setDisconnected(true);
+      };
+
+      term.onResize(({ cols, rows }) => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "resize", cols, rows }));
+          }
+        }, 100);
+      });
+
+      resizeObserver = new ResizeObserver(() => {
+        fitAddon.fit();
+      });
+      resizeObserver.observe(container);
+    })();
 
     return () => {
+      cancelled = true;
       clearTimeout(resizeTimer);
-      resizeObserver.disconnect();
-      ws.close();
-      terminal.dispose();
+      resizeObserver?.disconnect();
+      ws?.close();
+      terminal?.dispose();
     };
   }, [profile.id, sessionKey]);
 
@@ -423,6 +475,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const [setupActionError, setSetupActionError] = useState<string | null>(null);
   const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
   const [setupSheet, setSetupSheet] = useState<{ profile: VpnProfile; setup: SetupResponse["setup"] } | null>(null);
+  const [pendingForceDeleteId, setPendingForceDeleteId] = useState<number | null>(null);
 
   useEffect(() => {
     setFormValues(getInitialValues(modalState));
@@ -447,11 +500,13 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteProfile,
-    onSuccess: async (_, deletedId) => {
+    mutationFn: (variables: { id: number; force?: boolean }) =>
+      deleteProfile(variables.id, { force: variables.force }),
+    onSuccess: async (_, variables) => {
       await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
-      setSshProfile((current) => (current?.id === deletedId ? null : current));
-      setSetupSheet((current) => (current?.profile.id === deletedId ? null : current));
+      setSshProfile((current) => (current?.id === variables.id ? null : current));
+      setSetupSheet((current) => (current?.profile.id === variables.id ? null : current));
+      setPendingForceDeleteId(null);
     },
   });
 
@@ -469,6 +524,8 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
   const isDeleting = deleteMutation.isPending;
+
+  const profiles = profilesQuery.data ?? [];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -520,7 +577,32 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
       return;
     }
 
-    await deleteMutation.mutateAsync(profile.id);
+    setPendingForceDeleteId(null);
+    try {
+      await deleteMutation.mutateAsync({ id: profile.id });
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === PROFILE_IN_USE_ERROR
+      ) {
+        setPendingForceDeleteId(profile.id);
+      }
+      throw error;
+    }
+  }
+
+  async function handleForceDelete(profile: VpnProfile) {
+    if (
+      !window.confirm(
+        `Delete "${profile.label}" anyway?\n\nThis removes every chain hop that uses this profile (routing rules on those hops are lost), deletes chains that would have no hops left, then deletes the profile. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setPendingForceDeleteId(null);
+    await deleteMutation.mutateAsync({ id: profile.id, force: true });
   }
 
   async function handleSetup(profile: VpnProfile) {
@@ -541,7 +623,6 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
     }
   }
 
-  const profiles = profilesQuery.data ?? [];
   const modalTitle = modalState?.mode === "edit" ? "Edit VPN profile" : "Add VPN profile";
   const saveLabel =
     modalState?.mode === "edit"
@@ -568,7 +649,26 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
           </button>
         </div>
 
-        {mutationError ? <div style={errorStyle}>{getErrorMessage(mutationError)}</div> : null}
+        {mutationError ? (
+          <div style={errorStyle}>
+            <div>{getErrorMessage(mutationError)}</div>
+            {pendingForceDeleteId !== null ? (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  disabled={isDeleting}
+                  onClick={() => {
+                    const p = profiles.find((x) => x.id === pendingForceDeleteId);
+                    if (p) void handleForceDelete(p);
+                  }}
+                  style={dangerButtonStyle}
+                  type="button"
+                >
+                  {isDeleting ? "Deleting..." : "Delete anyway"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {setupActionError ? <div style={errorStyle}>{setupActionError}</div> : null}
 
         {profilesQuery.isPending ? (
@@ -592,10 +692,9 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
               </thead>
               <tbody>
                 {profiles.map((profile) => {
-                  const deleteDisabled = isDeleting && deleteMutation.variables === profile.id;
+                  const deleteDisabled = isDeleting && deleteMutation.variables?.id === profile.id;
                   const editDisabled =
-                    isSaving ||
-                    (isDeleting && deleteMutation.variables !== undefined && deleteMutation.variables === profile.id);
+                    isSaving || (isDeleting && deleteMutation.variables?.id === profile.id);
                   const setupBusy = setupMutation.isPending && setupMutation.variables === profile.id;
 
                   return (
