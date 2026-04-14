@@ -1,5 +1,7 @@
 # Chain traffic D3 diagram — implementation plan
 
+**Where to find this file:** It lives at `docs/superpowers/plans/2026-04-14-chain-traffic-d3-diagram.md` in the repo. If you only browse the default branch (`master`), merge the branch that added this file; earlier drafts were only on a feature branch and did not appear on `master`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** On the Chains page, show a D3 SVG diagram of the full saved chain (Entry → VPN hops) plus per-hop routing (default + rules) so operators see where traffic can go, matching `docs/superpowers/specs/2026-04-14-chain-traffic-d3-diagram-design.md`.
