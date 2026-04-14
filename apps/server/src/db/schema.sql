@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS vpn_profiles (
   ssh_user TEXT NOT NULL,
   ssh_password_ciphertext BLOB NOT NULL,
   ssh_password_nonce BLOB NOT NULL,
+  operational_status TEXT NOT NULL DEFAULT 'pending' CHECK (operational_status IN ('pending','working')),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
