@@ -593,4 +593,189 @@ describe("profilesRoutes", () => {
     const anon = await app.request("/api/profiles/ssh-terminal/preflight");
     expect(anon.status).toBe(401);
   });
+
+  test("POST /api/profiles/:id/clear-server dry-run leaves DB unchanged", async () => {
+    const app = createApp(db, env);
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "ClearDry",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "panel.clear-dry.example.com",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    db.query(
+      "UPDATE vpn_profiles SET operational_status = 'working', xui_web_base_path = ? WHERE id = 1",
+    ).run("abc");
+
+    const clearRes = await app.request("/api/profiles/1/clear-server", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(clearRes.status).toBe(200);
+    const body = (await clearRes.json()) as {
+      teardown: { mode: string; phases: { id: string }[] };
+    };
+    expect(body.teardown.mode).toBe("dry-run");
+    expect(body.teardown.phases[0]?.id).toBe("stop_xui");
+
+    const row = db
+      .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
+        "SELECT operational_status, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
+    expect(row?.operational_status).toBe("working");
+    expect(row?.xui_web_base_path).toBe("abc");
+  });
+
+  test("POST /api/profiles/:id/clear-server returns 400 when not eligible (pending, no setup failure)", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "PendingOnly",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.pending-only.example.com",
+      }),
+    });
+
+    const clearRes = await app.request("/api/profiles/1/clear-server", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(clearRes.status).toBe(400);
+  });
+
+  test("POST /api/profiles/:id/clear-server live success clears DB fields", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "LiveClear",
+        host: "10.0.0.3",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live-clear.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+
+    const clearRes = await app.request("/api/profiles/1/clear-server", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(clearRes.status).toBe(200);
+    const body = (await clearRes.json()) as {
+      profile: { operationalStatus: string };
+      teardown: { mode: string };
+    };
+    expect(body.teardown.mode).toBe("live");
+    expect(body.profile.operationalStatus).toBe("pending");
+
+    const row = db
+      .query<{ operational_status: string; xui_web_base_path: string | null; last_setup_error: string | null }, []>(
+        "SELECT operational_status, xui_web_base_path, last_setup_error FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
+    expect(row?.operational_status).toBe("pending");
+    expect(row?.xui_web_base_path).toBeNull();
+    expect(row?.last_setup_error).toBeNull();
+  });
+
+  test("POST /api/profiles/:id/clear-server live failure returns 500 and keeps working", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    let teardownPhase: "setup" | "clear" = "setup";
+    let clearCallIndex = 0;
+    const fakeSsh: SshExecFn = async () => {
+      if (teardownPhase === "setup") {
+        return { code: 0, stdout: "ok", stderr: "" };
+      }
+      clearCallIndex += 1;
+      if (clearCallIndex === 1) {
+        return { code: 0, stdout: "ok", stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "boom" };
+    };
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "LiveClearFail",
+        host: "10.0.0.4",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live-clear-fail.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+
+    teardownPhase = "clear";
+    clearCallIndex = 0;
+
+    const clearRes = await app.request("/api/profiles/1/clear-server", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(clearRes.status).toBe(500);
+
+    const row = db.query<{ operational_status: string }, []>(
+      "SELECT operational_status FROM vpn_profiles WHERE id = 1",
+    ).get();
+    expect(row?.operational_status).toBe("working");
+  });
 });

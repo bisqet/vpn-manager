@@ -14,6 +14,7 @@ import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceho
 import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
 import { resolveProfileSshTerminal } from "../vpn/profileSshTerminalGate";
 import { executeProfileSetup } from "../vpn/setupRunner";
+import { executeProfileTeardown } from "../vpn/teardownRunner";
 import type { SshExecFn } from "../vpn/sshExec";
 
 type VpnProfileRow = {
@@ -220,6 +221,68 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
             400,
           );
         }
+      }
+      if (err.status === 503) {
+        return c.json(
+          {
+            error:
+              "sshpass is required on the VPN Manager host for SSH password authentication (install the sshpass package)",
+          },
+          503,
+        );
+      }
+      throw e;
+    }
+  });
+
+  app.post("/:id/clear-server", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid profile id" }, 400);
+    }
+
+    const existing = getProfileById(db, id);
+    if (!existing) {
+      return c.json({ error: "Profile not found" }, 404);
+    }
+
+    try {
+      const result = await executeProfileTeardown({
+        db,
+        env,
+        profileId: id,
+        sshExec: options.sshExec,
+      });
+
+      if (result.outcome === "dry-run") {
+        return c.json({
+          profile: toProfileDto(result.profileRow as VpnProfileRow),
+          teardown: result.teardown,
+        });
+      }
+
+      if (result.outcome === "live-failed") {
+        return c.json(
+          {
+            error: "VPN clear-server failed",
+            profile: toProfileDto(result.profileRow as VpnProfileRow),
+            teardown: result.teardown,
+          },
+          500,
+        );
+      }
+
+      return c.json({
+        profile: toProfileDto(result.profileRow as VpnProfileRow),
+        teardown: result.teardown,
+      });
+    } catch (e: unknown) {
+      const err = e as { status?: number; message?: string };
+      if (err.status === 400 && err.message === "clear_server_not_eligible") {
+        return c.json(
+          { error: "Nothing to clear: profile is pending and setup did not record a failure." },
+          400,
+        );
       }
       if (err.status === 503) {
         return c.json(
