@@ -43,6 +43,26 @@ describe("profilesRoutes", () => {
     );
   });
 
+  test("rejects invalid panelHostname on create", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Bad",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "not-a-fqdn",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   test("requires auth for profile routes", async () => {
     const app = createApp(db, env);
 
@@ -67,6 +87,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "root",
         sshPassword: "hunter2",
+        panelHostname: "panel.vpn.example.com",
       }),
     });
 
@@ -78,6 +99,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "pending",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -125,6 +147,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -158,6 +181,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -200,6 +224,7 @@ describe("profilesRoutes", () => {
         sshPort: 2222,
         sshUser: "admin",
         sshPassword: "secret",
+        panelHostname: "panel.pinned.example.com",
       }),
     });
     expect(createRes.status).toBe(201);
@@ -235,6 +260,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "root",
         sshPassword: "pw",
+        panelHostname: "panel.edge.example.com",
       }),
     });
     expect(createRes.status).toBe(201);
@@ -269,6 +295,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "u",
         sshPassword: "p",
+        panelHostname: "panel.x.example.com",
       }),
     });
 

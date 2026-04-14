@@ -13,6 +13,7 @@ type VpnProfileRow = {
   ssh_port: number;
   ssh_user: string;
   operational_status: string;
+  panel_hostname: string;
   created_at: string;
   updated_at: string;
 };
@@ -31,6 +32,7 @@ function toProfileDto(row: VpnProfileRow) {
     host: row.host,
     sshPort: row.ssh_port,
     sshUser: row.ssh_user,
+    panelHostname: row.panel_hostname,
     operationalStatus: row.operational_status as "pending" | "working",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -65,6 +67,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           ssh_port,
           ssh_user,
           operational_status,
+          panel_hostname,
           ssh_password_ciphertext,
           ssh_password_nonce,
           created_at,
@@ -89,6 +92,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
           ssh_port,
           ssh_user,
           operational_status,
+          panel_hostname,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -106,7 +110,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
       return c.json({ error: "Invalid VPN profile payload", details: parsed.error.flatten() }, 400);
     }
 
-    const { label, host, sshPort, sshUser, sshPassword } = parsed.data;
+    const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
     const { ciphertext, nonce } = await encryptVpnPassword(env.masterKey, sshPassword);
 
     const result = db
@@ -117,10 +121,11 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
           ssh_port,
           ssh_user,
           ssh_password_ciphertext,
-          ssh_password_nonce
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+          ssh_password_nonce,
+          panel_hostname
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(label, host, sshPort, sshUser, ciphertext, nonce);
+      .run(label, host, sshPort, sshUser, ciphertext, nonce, panelHostname);
 
     const created = getProfileById(db, Number(result.lastInsertRowid));
     return c.json(toProfileDto(created!), 201);
@@ -172,7 +177,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
       return c.json({ error: "Invalid VPN profile payload", details: parsed.error.flatten() }, 400);
     }
 
-    const { label, host, sshPort, sshUser, sshPassword } = parsed.data;
+    const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
 
     let ciphertext = existing.ssh_password_ciphertext;
     let nonce = existing.ssh_password_nonce;
@@ -191,6 +196,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
         ssh_user = ?,
         ssh_password_ciphertext = ?,
         ssh_password_nonce = ?,
+        panel_hostname = ?,
         updated_at = datetime('now')
       WHERE id = ?`,
     ).run(
@@ -200,6 +206,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
       sshUser ?? existing.ssh_user,
       ciphertext,
       nonce,
+      panelHostname ?? existing.panel_hostname,
       id,
     );
 
