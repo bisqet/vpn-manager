@@ -2,7 +2,10 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
-import { ChainTrafficDiagram } from "../components/ChainTrafficDiagram";
+import {
+  ChainTrafficDiagram,
+  type ChainTrafficDiagramHandle,
+} from "../components/ChainTrafficDiagram";
 import type { ChainHopInput, RoutingProfileInput } from "../chainTrafficGraph";
 import { chainRailStyle, chainsPageRootStackStyle } from "../chainsPageLayout";
 import { trafficDiagramKey } from "../trafficDiagramKey";
@@ -161,6 +164,9 @@ export default function ChainsPage() {
   const modalDiagramContainerRef = useRef<HTMLDivElement>(null);
   const [modalDiagramWidth, setModalDiagramWidth] = useState(0);
   const modalCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const expandDiagramButtonRef = useRef<HTMLButtonElement>(null);
+  const modalDiagramRef = useRef<ChainTrafficDiagramHandle | null>(null);
+  const diagramModalPrevOpenRef = useRef(false);
 
   function chainHopRowsFromChain(chain: Chain): HopRow[] {
     if (chain.hops.length > 0) {
@@ -378,9 +384,14 @@ export default function ChainsPage() {
   }, [diagramModalOpen]);
 
   useEffect(() => {
+    const wasOpen = diagramModalPrevOpenRef.current;
+    if (wasOpen && !diagramModalOpen) {
+      expandDiagramButtonRef.current?.focus();
+    }
     if (diagramModalOpen) {
       modalCloseButtonRef.current?.focus();
     }
+    diagramModalPrevOpenRef.current = diagramModalOpen;
   }, [diagramModalOpen]);
 
   function makeHopRow() {
@@ -697,6 +708,7 @@ export default function ChainsPage() {
           <h3 style={{ ...sectionTitleStyle, margin: 0 }}>Traffic diagram</h3>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             <button
+              ref={expandDiagramButtonRef}
               type="button"
               aria-haspopup="dialog"
               aria-expanded={diagramModalOpen}
@@ -779,21 +791,32 @@ export default function ChainsPage() {
               >
                 Traffic diagram
               </h3>
-              <button
-                ref={modalCloseButtonRef}
-                type="button"
-                aria-label="Close diagram"
-                onClick={() => setDiagramModalOpen(false)}
-                style={ghostButtonStyle}
-              >
-                Close
-              </button>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => modalDiagramRef.current?.resetView()}
+                  style={ghostButtonStyle}
+                >
+                  Reset view
+                </button>
+                <button
+                  ref={modalCloseButtonRef}
+                  type="button"
+                  aria-label="Close diagram"
+                  onClick={() => setDiagramModalOpen(false)}
+                  style={ghostButtonStyle}
+                >
+                  Close
+                </button>
+              </div>
             </div>
             <div ref={modalDiagramContainerRef} style={{ width: "100%", minHeight: 240 }}>
               {modalDiagramWidth > 0 ? (
                 <ChainTrafficDiagram
+                  ref={modalDiagramRef}
                   diagramKey={trafficDiagramKeyValue}
                   draftLabels={draftDiagramLabels}
+                  hideInternalReset
                   hops={isCreateMode ? [] : sortedHopsForDiagram}
                   routingByChainHopId={routingByChainHopId}
                   routingFailedChainHopIds={routingFailedChainHopIds}

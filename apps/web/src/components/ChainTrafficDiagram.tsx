@@ -1,5 +1,11 @@
 import * as d3 from "d3";
-import { useCallback, useLayoutEffect, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+} from "react";
 import type { CSSProperties } from "react";
 import {
   buildChainRoutingGraph,
@@ -7,6 +13,10 @@ import {
   type ChainHopInput,
   type RoutingProfileInput,
 } from "../chainTrafficGraph";
+
+export type ChainTrafficDiagramHandle = {
+  resetView: () => void;
+};
 
 export type ChainTrafficDiagramProps = {
   diagramKey: string;
@@ -16,6 +26,8 @@ export type ChainTrafficDiagramProps = {
   routingFailedChainHopIds: Set<number>;
   routingLoading: boolean;
   draftLabels?: string[];
+  /** When true, omit the toolbar "Reset view" (e.g. modal renders its own). Default false. */
+  hideInternalReset?: boolean;
 };
 
 const COLORS: Record<string, string> = {
@@ -104,15 +116,22 @@ function strokeForVariant(v: string): string {
   return COLORS[v] ?? COLORS.backbone;
 }
 
-export function ChainTrafficDiagram({
-  diagramKey,
-  width,
-  hops,
-  routingByChainHopId,
-  routingFailedChainHopIds,
-  routingLoading,
-  draftLabels,
-}: ChainTrafficDiagramProps) {
+export const ChainTrafficDiagram = forwardRef<
+  ChainTrafficDiagramHandle,
+  ChainTrafficDiagramProps
+>(function ChainTrafficDiagram(
+  {
+    diagramKey,
+    width,
+    hops,
+    routingByChainHopId,
+    routingFailedChainHopIds,
+    routingLoading,
+    draftLabels,
+    hideInternalReset = false,
+  },
+  ref,
+) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const prevDiagramKeyRef = useRef<string | null>(null);
@@ -129,6 +148,8 @@ export function ChainTrafficDiagram({
     transformRef.current = d3.zoomIdentity;
     svg.call(zoom.transform, d3.zoomIdentity);
   }, []);
+
+  useImperativeHandle(ref, () => ({ resetView: handleResetView }), [handleResetView]);
 
   useLayoutEffect(() => {
     const svgEl = svgRef.current;
@@ -441,8 +462,8 @@ export function ChainTrafficDiagram({
   };
 
   return (
-    <div style={outerStyle} onWheel={!showEmpty ? (e) => e.preventDefault() : undefined}>
-      {!showEmpty ? (
+    <div style={outerStyle}>
+      {!showEmpty && !hideInternalReset ? (
         <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 12px 0" }}>
           <button
             type="button"
@@ -470,4 +491,4 @@ export function ChainTrafficDiagram({
       />
     </div>
   );
-}
+});
