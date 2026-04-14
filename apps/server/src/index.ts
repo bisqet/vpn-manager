@@ -10,6 +10,7 @@ import { loadEnv } from "./env";
 import { requireAuth } from "./middleware/auth";
 import { authRoutes } from "./routes/auth";
 import { chainsRoutes } from "./routes/chains";
+import { importRoutes } from "./routes/import";
 import { profilesRoutes, type ProfilesRoutesOptions } from "./routes/profiles";
 import { routingRoutes } from "./routes/routing";
 
@@ -37,6 +38,7 @@ export function createApp(
   authed.route("/profiles", profilesRoutes(db, env, options?.profiles ?? {}));
   authed.route("/chains", chainsRoutes(db));
   authed.route("/routing", routingRoutes(db));
+  authed.route("/import", importRoutes(db, env));
   api.route("/", authed);
 
   app.route("/api", api);
