@@ -1,3 +1,5 @@
+import { caddySiteAddressKey, httpsUrlHost } from "../net/panelAddress";
+
 /**
  * Ordered remote setup phases for 3x-ui + Caddy on Ubuntu 24.
  * Scripts assume root/sudo; admin credentials must be [a-zA-Z0-9]+ only (no shell metacharacters).
@@ -48,6 +50,8 @@ esac`;
 export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
   const { panelHostname, acmeEmail, xuiLocalPort, adminUsername, adminPassword, webBasePath } = ctx;
   const webPathForUrl = webBasePath.startsWith("/") ? webBasePath : `/${webBasePath}`;
+  const caddySiteKey = caddySiteAddressKey(panelHostname);
+  const httpsHost = httpsUrlHost(panelHostname);
 
   const preflight: SetupPhase = {
     id: "preflight",
@@ -138,7 +142,7 @@ cat > ${caddyConfPath} <<CADDY_EOF
 {
 \temail ${acmeEmail}
 }
-${panelHostname} {
+${caddySiteKey} {
 \tencode gzip
 \treverse_proxy 127.0.0.1:${xuiLocalPort}
 }
@@ -160,7 +164,7 @@ systemctl is-active --quiet caddy
     script: `set -euo pipefail
 systemctl is-active --quiet ${XUI_SYSTEMD}
 systemctl is-active --quiet caddy
-curl -fsS -o /dev/null "https://${panelHostname}${webPathForUrl}/"
+curl -fsS -g -o /dev/null "https://${httpsHost}${webPathForUrl}/"
 `,
   };
 

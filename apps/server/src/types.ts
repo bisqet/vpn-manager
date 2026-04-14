@@ -6,21 +6,14 @@ declare module "hono" {
   }
 }
 
-const panelHostnameSchema = z
-  .string()
-  .min(1)
-  .regex(
-    /^([a-zA-Z0-9](-*[a-zA-Z0-9])*\.)+[a-zA-Z]{2,}$/,
-    "panelHostname must be a DNS name (FQDN)",
-  );
-
 export const vpnProfileCreate = z.object({
   label: z.string().min(1),
   host: z.string().min(1),
   sshPort: z.number().int().min(1).max(65535),
   sshUser: z.string().min(1),
   sshPassword: z.string().min(1),
-  panelHostname: panelHostnameSchema,
+  /** Omitted or empty allowed when `host` is a public IP (server derives panel). */
+  panelHostname: z.string().optional(),
 });
 
 export const vpnProfileUpdate = z.object({
@@ -29,7 +22,8 @@ export const vpnProfileUpdate = z.object({
   sshPort: z.number().int().min(1).max(65535).optional(),
   sshUser: z.string().min(1).optional(),
   sshPassword: z.string().min(1).optional(),
-  panelHostname: panelHostnameSchema.optional(),
+  /** Send empty string to clear to derived-from-host when host is a public IP. */
+  panelHostname: z.string().optional(),
 });
 
 export {};

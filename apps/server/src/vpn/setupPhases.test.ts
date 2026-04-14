@@ -39,4 +39,30 @@ describe("buildSetupPhases", () => {
       "verify",
     ]);
   });
+
+  test("caddy site key and verify URL support IPv4 and public IPv6", () => {
+    const v4 = buildSetupPhases({
+      panelHostname: "203.0.113.5",
+      acmeEmail: "ops@example.com",
+      xuiLocalPort: 2053,
+      adminUsername: "u",
+      adminPassword: "p",
+      webBasePath: "abc",
+    });
+    const joined4 = v4.map((p) => p.script).join("\n");
+    expect(joined4).toContain("203.0.113.5 {");
+    expect(joined4).toContain("https://203.0.113.5/");
+
+    const v6 = buildSetupPhases({
+      panelHostname: "2001:4860:4860::8888",
+      acmeEmail: "ops@example.com",
+      xuiLocalPort: 2053,
+      adminUsername: "u",
+      adminPassword: "p",
+      webBasePath: "abc",
+    });
+    const joined6 = v6.map((p) => p.script).join("\n");
+    expect(joined6).toContain("[2001:4860:4860::8888] {");
+    expect(joined6).toContain("https://[2001:4860:4860::8888]/");
+  });
 });

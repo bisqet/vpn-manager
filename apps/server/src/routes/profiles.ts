@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
+import { resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
 import { executeProfileSetup } from "../vpn/setupRunner";
@@ -117,6 +118,13 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     }
 
     const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
+    const hostTrimmed = host.trim();
+    const panelRaw = panelHostname?.trim() ?? "";
+    const resolved = resolvePanelHostname({ host: hostTrimmed, panel: panelRaw });
+    if (!resolved.ok) {
+      return c.json({ error: resolved.message }, 400);
+    }
+
     const { ciphertext, nonce } = await encryptVpnPassword(env.masterKey, sshPassword);
 
     const result = db
@@ -131,7 +139,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           panel_hostname
         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(label, host, sshPort, sshUser, ciphertext, nonce, panelHostname);
+      .run(label, hostTrimmed, sshPort, sshUser, ciphertext, nonce, resolved.panel);
 
     const created = getProfileById(db, Number(result.lastInsertRowid));
     return c.json(toProfileDto(created!), 201);
@@ -233,6 +241,14 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
 
     const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
 
+    const mergedHost = (host ?? existing.host).trim();
+    const mergedPanelRaw =
+      panelHostname !== undefined ? panelHostname.trim() : existing.panel_hostname.trim();
+    const resolved = resolvePanelHostname({ host: mergedHost, panel: mergedPanelRaw });
+    if (!resolved.ok) {
+      return c.json({ error: resolved.message }, 400);
+    }
+
     let ciphertext = existing.ssh_password_ciphertext;
     let nonce = existing.ssh_password_nonce;
     if (sshPassword) {
@@ -255,12 +271,12 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       WHERE id = ?`,
     ).run(
       label ?? existing.label,
-      host ?? existing.host,
+      mergedHost,
       sshPort ?? existing.ssh_port,
       sshUser ?? existing.ssh_user,
       ciphertext,
       nonce,
-      panelHostname ?? existing.panel_hostname,
+      resolved.panel,
       id,
     );
 

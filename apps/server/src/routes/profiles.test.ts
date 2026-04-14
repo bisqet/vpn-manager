@@ -44,6 +44,46 @@ describe("profilesRoutes", () => {
     );
   });
 
+  test("creates profile with derived panel when host is public IP and panelHostname omitted", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Pub",
+        host: "203.0.113.20",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { panelHostname: string };
+    expect(body.panelHostname).toBe("203.0.113.20");
+  });
+
+  test("rejects create when panelHostname omitted and host is not public IP", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "NoPanel",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   test("rejects invalid panelHostname on create", async () => {
     const app = createApp(db, env);
     const res = await app.request("/api/profiles", {
@@ -351,6 +391,37 @@ describe("profilesRoutes", () => {
       headers: { Cookie: `${SESSION_COOKIE}=session-token` },
     });
     expect(setupRes.status).toBe(409);
+  });
+
+  test("PATCH clears panel to derived value when panelHostname empty string and host public", async () => {
+    const app = createApp(db, env);
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "A",
+        host: "198.51.100.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "panel.patch.example.com",
+      }),
+    });
+    const patchRes = await app.request("/api/profiles/1", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({ host: "198.51.100.3", panelHostname: "" }),
+    });
+    expect(patchRes.status).toBe(200);
+    const body = (await patchRes.json()) as { panelHostname: string; host: string };
+    expect(body.host).toBe("198.51.100.3");
+    expect(body.panelHostname).toBe("198.51.100.3");
   });
 
   test("PATCH runs placeholder verify and sets operationalStatus working", async () => {
