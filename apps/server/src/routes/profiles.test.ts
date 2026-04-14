@@ -5,6 +5,7 @@ import { decryptVpnPassword } from "../crypto/vpnSecret";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
+import type { SshExecFn } from "../vpn/sshExec";
 
 type ProfileRow = {
   id: number;
@@ -23,6 +24,9 @@ const env: Env = {
   port: 3000,
   databasePath: ":memory:",
   masterKey: new Uint8Array(32).fill(9),
+  vpnSshEnabled: false,
+  acmeEmail: undefined,
+  sshKnownHostsFile: undefined,
 };
 
 describe("profilesRoutes", () => {
@@ -38,6 +42,26 @@ describe("profilesRoutes", () => {
       1,
       Date.now() + 60_000,
     );
+  });
+
+  test("rejects invalid panelHostname on create", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Bad",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "not-a-fqdn",
+      }),
+    });
+    expect(res.status).toBe(400);
   });
 
   test("requires auth for profile routes", async () => {
@@ -64,6 +88,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "root",
         sshPassword: "hunter2",
+        panelHostname: "panel.vpn.example.com",
       }),
     });
 
@@ -75,6 +100,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "pending",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -122,6 +148,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -155,6 +182,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      panelHostname: "panel.vpn.example.com",
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
@@ -197,6 +225,7 @@ describe("profilesRoutes", () => {
         sshPort: 2222,
         sshUser: "admin",
         sshPassword: "secret",
+        panelHostname: "panel.pinned.example.com",
       }),
     });
     expect(createRes.status).toBe(201);
@@ -217,7 +246,7 @@ describe("profilesRoutes", () => {
     });
   });
 
-  test("POST /api/profiles/:id/setup marks profile working", async () => {
+  test("POST /api/profiles/:id/setup returns dry-run when VPN_SSH_ENABLED is false", async () => {
     const app = createApp(db, env);
 
     const createRes = await app.request("/api/profiles", {
@@ -232,6 +261,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "root",
         sshPassword: "pw",
+        panelHostname: "panel.edge.example.com",
       }),
     });
     expect(createRes.status).toBe(201);
@@ -243,13 +273,84 @@ describe("profilesRoutes", () => {
       headers: { Cookie: `${SESSION_COOKIE}=session-token` },
     });
     expect(setupRes.status).toBe(200);
-    const afterSetup = await setupRes.json();
-    expect(afterSetup.operationalStatus).toBe("working");
+    const body = await setupRes.json();
+    expect(body.profile.operationalStatus).toBe("pending");
+    expect(body.setup.mode).toBe("dry-run");
+    expect(body.setup.phases.length).toBeGreaterThanOrEqual(7);
+    expect(body.setup.phases[0].id).toBe("preflight");
 
     const row = db.query<{ operational_status: string }, []>(
       "SELECT operational_status FROM vpn_profiles WHERE id = 1",
     ).get();
+    expect(row?.operational_status).toBe("pending");
+  });
+
+  test("POST /api/profiles/:id/setup live path succeeds with fake ssh", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Live",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+    const body = await setupRes.json();
+    expect(body.setup.mode).toBe("live");
+    expect(body.profile.operationalStatus).toBe("working");
+    const row = db
+      .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
+        "SELECT operational_status, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
     expect(row?.operational_status).toBe("working");
+    expect(row?.xui_web_base_path).toBeTruthy();
+  });
+
+  test("POST /api/profiles/:id/setup returns 409 when already working", async () => {
+    const app = createApp(db, env);
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "W",
+        host: "1.1.1.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "panel.w.example.com",
+      }),
+    });
+    db.query("UPDATE vpn_profiles SET operational_status = 'working' WHERE id = 1").run();
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(409);
   });
 
   test("PATCH runs placeholder verify and sets operationalStatus working", async () => {
@@ -266,6 +367,7 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "u",
         sshPassword: "p",
+        panelHostname: "panel.x.example.com",
       }),
     });
 
