@@ -1,7 +1,10 @@
+import "@xterm/xterm/css/xterm.css";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CSSProperties, FormEvent, KeyboardEvent } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, apiFetch } from "../api/client";
+import { ApiError, type AuthUser, apiFetch } from "../api/client";
 import { isFqdnPanel, isPublicIpLiteral } from "../lib/panelAddress";
 
 const profilesQueryKey = ["profiles"] as const;
@@ -264,13 +267,9 @@ type SshTerminalSheetProps = {
 
 function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
   const titleId = "ssh-sheet-title";
-  const prompt = `${profile.sshUser}@${profile.host}:~$ `;
-  const [lines, setLines] = useState<string[]>([
-    "# Not a real SSH session — demo only. Type commands for your own notes.",
-    "# Manual server prep — paste commands here (not executed).",
-  ]);
-  const [currentLine, setCurrentLine] = useState("");
-  const terminalRef = useRef<HTMLDivElement>(null);
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const [sessionKey, setSessionKey] = useState(0);
+  const [disconnected, setDisconnected] = useState(false);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -283,6 +282,9 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
   useEffect(() => {
     function onKeyDown(e: globalThis.KeyboardEvent) {
       if (e.key === "Escape") {
+        if (terminalContainerRef.current?.contains(e.target as Node)) {
+          return;
+        }
         onClose();
       }
     }
@@ -291,26 +293,66 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
   }, [onClose]);
 
   useEffect(() => {
-    terminalRef.current?.focus();
-  }, [profile.id]);
+    const container = terminalContainerRef.current;
+    if (!container) return;
 
-  function handleTerminalKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      setLines((prev) => [...prev, `${prompt}${currentLine}`]);
-      setCurrentLine("");
-      return;
-    }
-    if (e.key === "Backspace") {
-      e.preventDefault();
-      setCurrentLine((c) => c.slice(0, -1));
-      return;
-    }
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      setCurrentLine((c) => c + e.key);
-    }
-  }
+    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/profiles/${profile.id}/ssh`;
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+
+    const terminal = new Terminal({ cursorBlink: true });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(container);
+    fitAddon.fit();
+
+    setDisconnected(false);
+
+    const encoder = new TextEncoder();
+    terminal.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(encoder.encode(data));
+      }
+    });
+
+    ws.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        try {
+          JSON.parse(event.data);
+        } catch {
+          // not a JSON control message — ignore
+        }
+      } else {
+        terminal.write(new Uint8Array(event.data as ArrayBuffer));
+      }
+    };
+
+    ws.onclose = () => setDisconnected(true);
+    ws.onerror = () => setDisconnected(true);
+
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    terminal.onResize(({ cols, rows }) => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
+      }, 100);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      fitAddon.fit();
+    });
+    resizeObserver.observe(container);
+
+    return () => {
+      clearTimeout(resizeTimer);
+      resizeObserver.disconnect();
+      ws.close();
+      terminal.dispose();
+    };
+  }, [profile.id, sessionKey]);
 
   return (
     <div style={sshBackdropStyle} role="presentation" onClick={onClose}>
@@ -329,29 +371,27 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
             Close
           </button>
         </div>
-        <div
-          ref={terminalRef}
-          tabIndex={0}
-          style={sshTerminalStyle}
-          onKeyDown={handleTerminalKeyDown}
-        >
-          {lines.map((line, i) => (
-            <div key={i} style={sshTerminalLineStyle}>
-              {line}
+        <div style={sshTerminalWrapperStyle}>
+          <div ref={terminalContainerRef} style={sshXtermContainerStyle} />
+          {disconnected ? (
+            <div style={sshDisconnectedOverlayStyle}>
+              <span>Disconnected</span>
+              <button
+                onClick={() => setSessionKey((k) => k + 1)}
+                style={primaryButtonStyle}
+                type="button"
+              >
+                Reconnect
+              </button>
             </div>
-          ))}
-          <div style={sshTerminalLineStyle}>
-            <span style={sshPromptStyle}>{prompt}</span>
-            <span>{currentLine}</span>
-            <span style={sshCaretStyle}>▍</span>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>
   );
 }
 
-export default function VpnsPage() {
+export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const queryClient = useQueryClient();
   const profilesQuery = useQuery({
     queryKey: profilesQueryKey,
@@ -565,13 +605,16 @@ export default function VpnsPage() {
                             </button>
                           ) : null}
                           <button
-                            disabled={editDisabled}
+                            disabled={editDisabled || !authUser}
                             onClick={() => setSshProfile(profile)}
                             style={secondaryButtonStyle}
                             type="button"
                           >
                             SSH
                           </button>
+                          {!authUser ? (
+                            <span style={guestSshHintStyle}>Sign in to SSH</span>
+                          ) : null}
                           <button
                             disabled={editDisabled}
                             onClick={() => setModalState({ mode: "edit", profile })}
@@ -865,12 +908,38 @@ const sshTerminalLineStyle: CSSProperties = {
   wordBreak: "break-all",
 };
 
-const sshPromptStyle: CSSProperties = {
-  color: "#38bdf8",
+const sshTerminalWrapperStyle: CSSProperties = {
+  flex: 1,
+  position: "relative",
+  background: "#0f172a",
+  overflow: "hidden",
 };
 
-const sshCaretStyle: CSSProperties = {
-  color: "#94a3b8",
+const sshXtermContainerStyle: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  padding: "8px",
+  boxSizing: "border-box",
+};
+
+const sshDisconnectedOverlayStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "16px",
+  background: "rgba(15, 23, 42, 0.85)",
+  color: "#e2e8f0",
+  fontSize: "1rem",
+  fontWeight: 600,
+};
+
+const guestSshHintStyle: CSSProperties = {
+  fontSize: "0.8rem",
+  color: "#6b7280",
+  alignSelf: "center",
 };
 
 const formStyle: CSSProperties = {

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
-import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { Link, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { authQueryKey, fetchCurrentUser } from "./api/client";
 import ChainsPage from "./pages/ChainsPage";
 import ExportPage from "./pages/ExportPage";
@@ -21,9 +21,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/vpns" element={<VpnsShell />} />
       <Route element={<ProtectedLayout />}>
         <Route index element={<Navigate to="/vpns" replace />} />
-        <Route path="/vpns" element={<VpnsPage />} />
         <Route path="/chains" element={<ChainsPage />} />
         <Route path="/routing" element={<RoutingPage />} />
         <Route path="/import" element={<ImportPage />} />
@@ -31,6 +31,85 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/vpns" replace />} />
     </Routes>
+  );
+}
+
+function VpnsShell() {
+  const sessionQuery = useQuery({
+    queryKey: authQueryKey,
+    queryFn: fetchCurrentUser,
+    retry: false,
+  });
+
+  if (sessionQuery.isPending) {
+    return <FullScreenMessage title="Checking session..." />;
+  }
+
+  if (sessionQuery.isError) {
+    return (
+      <FullScreenMessage
+        title="Unable to load your session"
+        message="Make sure the API server is running on http://localhost:3000."
+      />
+    );
+  }
+
+  const user = sessionQuery.data.user;
+
+  return (
+    <div style={shellStyle}>
+      <aside style={sidebarStyle}>
+        <div>
+          <div style={eyebrowStyle}>VPN Manager</div>
+          <h1 style={sidebarTitleStyle}>Control panel</h1>
+          {user ? (
+            <p style={sidebarCopyStyle}>Signed in as {user.username}</p>
+          ) : (
+            <p style={sidebarCopyStyle}>VPN profiles work without signing in.</p>
+          )}
+        </div>
+        <nav style={navStyle}>
+          <NavLink
+            to="/vpns"
+            end
+            style={({ isActive }) => ({
+              ...navLinkStyle,
+              background: isActive ? "#111827" : "transparent",
+              color: isActive ? "#ffffff" : "#111827",
+            })}
+          >
+            VPNs
+          </NavLink>
+          {user ? (
+            navItems
+              .filter((item) => item.path !== "/vpns")
+              .map((item) => (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  style={({ isActive }) => ({
+                    ...navLinkStyle,
+                    background: isActive ? "#111827" : "transparent",
+                    color: isActive ? "#ffffff" : "#111827",
+                  })}
+                >
+                  {item.label}
+                </NavLink>
+              ))
+          ) : (
+            <p style={guestNavHintStyle}>
+              <Link style={guestSignInLinkStyle} to="/login">
+                Sign in
+              </Link>{" "}
+              for chains, routing, import, and export.
+            </p>
+          )}
+        </nav>
+      </aside>
+      <main style={mainStyle}>
+        <VpnsPage authUser={user} />
+      </main>
+    </div>
   );
 }
 
@@ -184,4 +263,17 @@ const helperTextStyle: CSSProperties = {
   margin: 0,
   color: "#4b5563",
   lineHeight: 1.5,
+};
+
+const guestNavHintStyle: CSSProperties = {
+  margin: "4px 0 0",
+  padding: "10px 12px",
+  fontSize: "0.875rem",
+  lineHeight: 1.45,
+  color: "#4b5563",
+};
+
+const guestSignInLinkStyle: CSSProperties = {
+  fontWeight: 600,
+  color: "#111827",
 };
