@@ -6,9 +6,10 @@ import { getCookie } from "hono/cookie";
 import type { UpgradeWebSocket } from "hono/ws";
 import { SESSION_COOKIE } from "../auth/cookie";
 import { getSessionUserId } from "../auth/session";
+import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
-import { resolvePanelHostname } from "../net/panelAddress";
+import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
 import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
@@ -26,6 +27,7 @@ type VpnProfileRow = {
   operational_status: string;
   panel_hostname: string;
   last_setup_error: string | null;
+  xui_web_base_path: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -42,7 +44,11 @@ export type ProfilesRoutesOptions = {
   upgradeWebSocket?: UpgradeWebSocket;
 };
 
-function toProfileDto(row: VpnProfileRow) {
+function toProfileDto(row: VpnProfileRow, userId: number | null) {
+  const panelUrl =
+    userId !== null && row.operational_status === "working"
+      ? buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path)
+      : null;
   return {
     id: row.id,
     label: row.label,
@@ -54,6 +60,7 @@ function toProfileDto(row: VpnProfileRow) {
     lastSetupError: row.last_setup_error ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    panelUrl,
   };
 }
 
@@ -87,6 +94,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           operational_status,
           panel_hostname,
           last_setup_error,
+          xui_web_base_path,
           ssh_password_ciphertext,
           ssh_password_nonce,
           created_at,
@@ -103,6 +111,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
   const uw = options.upgradeWebSocket ?? upgradeWebSocket;
 
   app.get("/", (c) => {
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
     const rows = db
       .query<VpnProfileRow>(
         `SELECT
@@ -114,6 +124,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           operational_status,
           panel_hostname,
           last_setup_error,
+          xui_web_base_path,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -121,7 +132,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       )
       .all();
 
-    return c.json(rows.map(toProfileDto));
+    return c.json(rows.map((row) => toProfileDto(row, userId)));
   });
 
   /** Browser SSH cannot read JSON from failed WS upgrades; check this before opening the socket. */
@@ -166,7 +177,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       .run(label, hostTrimmed, sshPort, sshUser, ciphertext, nonce, resolved.panel);
 
     const created = getProfileById(db, Number(result.lastInsertRowid));
-    return c.json(toProfileDto(created!), 201);
+    const sessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
+    return c.json(toProfileDto(created!, sessionUserId), 201);
   });
 
   app.post("/:id/setup", async (c) => {
@@ -188,9 +200,10 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         sshExec: options.sshExec,
       });
 
+      const setupSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
       if (result.outcome === "dry-run") {
         return c.json({
-          profile: toProfileDto(result.profileRow as VpnProfileRow),
+          profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
           setup: result.setup,
         });
       }
@@ -199,7 +212,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         return c.json(
           {
             error: "VPN setup failed",
-            profile: toProfileDto(result.profileRow as VpnProfileRow),
+            profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
             setup: result.setup,
           },
           500,
@@ -207,7 +220,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       }
 
       return c.json({
-        profile: toProfileDto(result.profileRow as VpnProfileRow),
+        profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
         setup: result.setup,
       });
     } catch (e: unknown) {
@@ -372,7 +385,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     ).run(nextStatus, id);
 
     const updated = getProfileById(db, id);
-    return c.json(toProfileDto(updated!));
+    const patchSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
+    return c.json(toProfileDto(updated!, patchSessionUserId));
   });
 
   function deleteVpnProfileWithHopCleanup(db: Database, id: number) {
@@ -441,6 +455,69 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
 
       throw error;
     }
+  });
+
+  app.get("/:id/panel-login", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid VPN profile id" }, 400);
+    }
+
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
+    if (userId === null) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const row =
+      db
+        .query<
+          {
+            operational_status: string;
+            panel_hostname: string;
+            xui_web_base_path: string | null;
+            xui_secrets_ciphertext: Uint8Array | null;
+            xui_secrets_nonce: Uint8Array | null;
+          },
+          [number]
+        >(
+          `SELECT operational_status, panel_hostname, xui_web_base_path,
+                xui_secrets_ciphertext, xui_secrets_nonce
+         FROM vpn_profiles WHERE id = ?`,
+        )
+        .get(id) ?? null;
+
+    if (!row) {
+      return c.json({ error: "Profile not found" }, 404);
+    }
+
+    if (row.operational_status !== "working") {
+      return c.json({ error: "Panel login is only available after successful setup" }, 409);
+    }
+    if (!row.xui_secrets_ciphertext || !row.xui_secrets_nonce || !row.xui_web_base_path) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    let secrets;
+    try {
+      secrets = await decryptXuiSecretsJson(env.masterKey, row.xui_secrets_ciphertext, row.xui_secrets_nonce);
+    } catch {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+    if (secrets.v !== 1) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path);
+    if (!panelUrl) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    return c.json({
+      panelUrl,
+      adminUsername: secrets.adminUsername,
+      adminPassword: secrets.adminPassword,
+    });
   });
 
   app.get(

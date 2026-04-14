@@ -16,6 +16,7 @@ type VpnProfile = {
   sshPort: number;
   sshUser: string;
   panelHostname: string;
+  panelUrl: string | null;
   operationalStatus: "pending" | "working";
   lastSetupError: string | null;
   createdAt: string;
@@ -121,6 +122,16 @@ function clearServerFromProfile(id: number) {
   });
 }
 
+type PanelLoginResponse = {
+  panelUrl: string;
+  adminUsername: string;
+  adminPassword: string;
+};
+
+function fetchPanelLogin(profileId: number) {
+  return apiFetch<PanelLoginResponse>(`/api/profiles/${profileId}/panel-login`);
+}
+
 function getInitialValues(modalState: ModalState): ProfileFormValues {
   if (!modalState || modalState.mode === "create") {
     return emptyFormValues;
@@ -198,6 +209,41 @@ function hasValidationError(
   result: ReturnType<typeof validateFormValues>,
 ): result is { error: string } {
   return "error" in result;
+}
+
+function ClipboardIcon() {
+  return (
+    <svg
+      aria-hidden
+      focusable="false"
+      height={16}
+      viewBox="0 0 24 24"
+      width={16}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <rect
+        fill="none"
+        height="14"
+        rx="2"
+        ry="2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+        width="8"
+        x="8"
+        y="2"
+      />
+    </svg>
+  );
 }
 
 type SetupSheetProps = {
@@ -488,6 +534,11 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [setupActionError, setSetupActionError] = useState<string | null>(null);
   const [clearServerActionError, setClearServerActionError] = useState<string | null>(null);
+  const [panelCopyError, setPanelCopyError] = useState<string | null>(null);
+  const [panelCopySuccess, setPanelCopySuccess] = useState<string | null>(null);
+  /** Per-profile refcount so parallel username+password copies for one row do not clear loading early. */
+  const [panelLoginBusyById, setPanelLoginBusyById] = useState<Record<number, number>>({});
+  const panelLoginCache = useRef(new Map<number, PanelLoginResponse>());
   const [sshProfile, setSshProfile] = useState<VpnProfile | null>(null);
   const [setupSheet, setSetupSheet] = useState<{
     profile: VpnProfile;
@@ -566,6 +617,10 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
 
   const profiles = profilesQuery.data ?? [];
 
+  useEffect(() => {
+    panelLoginCache.current.clear();
+  }, [profilesQuery.dataUpdatedAt]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!modalState) {
@@ -643,6 +698,46 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
 
     setPendingForceDeleteId(null);
     await deleteMutation.mutateAsync({ id: profile.id, force: true });
+  }
+
+  function panelLoginBumpBusy(profileId: number, delta: number) {
+    setPanelLoginBusyById((prev) => {
+      const next = { ...prev };
+      const n = Math.max(0, (next[profileId] ?? 0) + delta);
+      if (n === 0) {
+        delete next[profileId];
+      } else {
+        next[profileId] = n;
+      }
+      return next;
+    });
+  }
+
+  async function copyPanelField(profileId: number, field: "adminUsername" | "adminPassword") {
+    setPanelCopyError(null);
+    setPanelCopySuccess(null);
+    panelLoginBumpBusy(profileId, 1);
+    try {
+      let data = panelLoginCache.current.get(profileId);
+      if (!data) {
+        data = await fetchPanelLogin(profileId);
+        panelLoginCache.current.set(profileId, data);
+      }
+      const text = field === "adminUsername" ? data.adminUsername : data.adminPassword;
+      await navigator.clipboard.writeText(text);
+      setPanelCopySuccess(field === "adminUsername" ? "Panel admin username copied." : "Panel admin password copied.");
+      window.setTimeout(() => setPanelCopySuccess(null), 2000);
+    } catch (error) {
+      if (error instanceof Error && error.name === "NotAllowedError") {
+        setPanelCopyError("Clipboard access was denied. Check browser permissions and try again.");
+      } else if (error instanceof ApiError) {
+        setPanelCopyError(getErrorMessage(error));
+      } else {
+        setPanelCopyError("Could not copy to clipboard. Please try again.");
+      }
+    } finally {
+      panelLoginBumpBusy(profileId, -1);
+    }
   }
 
   async function handleSetup(profile: VpnProfile) {
@@ -745,6 +840,8 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         ) : null}
         {setupActionError ? <div style={errorStyle}>{setupActionError}</div> : null}
         {clearServerActionError ? <div style={errorStyle}>{clearServerActionError}</div> : null}
+        {panelCopyError ? <div style={errorStyle}>{panelCopyError}</div> : null}
+        {panelCopySuccess ? <div style={inlineSuccessStyle}>{panelCopySuccess}</div> : null}
 
         {profilesQuery.isPending ? (
           <div style={emptyStateStyle}>Loading profiles...</div>
@@ -760,7 +857,14 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                   <th style={tableHeadCellStyle}>Label</th>
                   <th style={tableHeadCellStyle}>IP or Host</th>
                   <th style={tableHeadCellStyle}>SSH port</th>
-                  <th style={tableHeadCellStyle}>User</th>
+                  <th style={tableHeadCellStyle}>SSH user</th>
+                  <th style={tableHeadCellStyle}>Panel</th>
+                  <th style={tableHeadCellStyle} title="Copy 3x-ui panel admin username">
+                    Panel user
+                  </th>
+                  <th style={tableHeadCellStyle} title="Copy 3x-ui panel admin password">
+                    Panel pass
+                  </th>
                   <th style={tableHeadCellStyle}>Status</th>
                   <th style={tableHeadCellStyle}>Actions</th>
                 </tr>
@@ -771,6 +875,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                   const editDisabled =
                     isSaving || (isDeleting && deleteMutation.variables?.id === profile.id);
                   const setupBusy = setupMutation.isPending && setupMutation.variables === profile.id;
+                  const panelLoginBusy = (panelLoginBusyById[profile.id] ?? 0) > 0;
 
                   return (
                     <tr key={profile.id}>
@@ -778,6 +883,59 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                       <td style={tableBodyCellStyle}>{profile.host}</td>
                       <td style={tableBodyCellStyle}>{profile.sshPort}</td>
                       <td style={tableBodyCellStyle}>{profile.sshUser}</td>
+                      <td style={tableBodyCellStyle}>
+                        {profile.panelUrl ? (
+                          <a
+                            aria-label={`Open 3x-ui panel for ${profile.label}`}
+                            href={profile.panelUrl}
+                            rel="noopener noreferrer"
+                            style={{ color: "#1d4ed8", fontWeight: 600 }}
+                            target="_blank"
+                          >
+                            Open
+                          </a>
+                        ) : !authUser && profile.operationalStatus === "working" ? (
+                          <span style={guestSshHintStyle}>Sign in to open panel</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={tableBodyCellStyle}>
+                        {authUser && profile.operationalStatus === "working" ? (
+                          <button
+                            aria-busy={panelLoginBusy}
+                            aria-label="Copy panel admin username"
+                            disabled={panelLoginBusy}
+                            onClick={() => void copyPanelField(profile.id, "adminUsername")}
+                            style={iconButtonStyle}
+                            type="button"
+                          >
+                            <ClipboardIcon />
+                          </button>
+                        ) : !authUser && profile.operationalStatus === "working" ? (
+                          <span style={guestSshHintStyle}>Sign in to copy</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={tableBodyCellStyle}>
+                        {authUser && profile.operationalStatus === "working" ? (
+                          <button
+                            aria-busy={panelLoginBusy}
+                            aria-label="Copy panel admin password"
+                            disabled={panelLoginBusy}
+                            onClick={() => void copyPanelField(profile.id, "adminPassword")}
+                            style={iconButtonStyle}
+                            type="button"
+                          >
+                            <ClipboardIcon />
+                          </button>
+                        ) : !authUser && profile.operationalStatus === "working" ? (
+                          <span style={guestSshHintStyle}>Sign in to copy</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td style={tableBodyCellStyle}>
                         {profile.operationalStatus === "working" ? (
                           <span style={statusWorkingStyle}>Working</span>
@@ -1207,6 +1365,19 @@ const secondaryButtonStyle: CSSProperties = {
   borderColor: "#d1d5db",
 };
 
+const iconButtonStyle: CSSProperties = {
+  ...baseButtonStyle,
+  padding: "6px",
+  minWidth: "32px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 0,
+  background: "#ffffff",
+  color: "#111827",
+  borderColor: "#d1d5db",
+};
+
 const ghostButtonStyle: CSSProperties = {
   ...baseButtonStyle,
   background: "#ffffff",
@@ -1237,6 +1408,16 @@ const errorStyle: CSSProperties = {
   background: "#fef2f2",
   color: "#b91c1c",
   border: "1px solid #fecaca",
+};
+
+const inlineSuccessStyle: CSSProperties = {
+  marginTop: "12px",
+  padding: "10px 14px",
+  borderRadius: "10px",
+  background: "#ecfdf5",
+  color: "#047857",
+  border: "1px solid #a7f3d0",
+  fontSize: "14px",
 };
 
 const modalBackdropStyle: CSSProperties = {
