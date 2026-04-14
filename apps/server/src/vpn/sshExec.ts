@@ -1,4 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
+// @ts-expect-error TS7016 -- ssh2 has no bundled declarations in this workspace
+import { Client } from "ssh2";
+import { buildSsh2ConnectOptions } from "./ssh2ConnectOptions";
 
 export type SshExecArgs = {
   host: string;
@@ -16,60 +18,119 @@ export type SshExecFn = (args: SshExecArgs) => Promise<SshExecResult>;
 
 const MAX_CAPTURE = 16_384;
 
+/** Handshake timeout; full phase budget is {@link SshExecArgs.timeoutMs}. */
+const SSH_READY_TIMEOUT_MS = 60_000;
+
 function truncate(s: string): string {
   if (s.length <= MAX_CAPTURE) return s;
   return `${s.slice(0, MAX_CAPTURE)}\n… [truncated]`;
 }
 
-export function sshpassAvailable(): boolean {
-  const r = spawnSync("which", ["sshpass"], { stdio: "ignore" });
-  return r.status === 0;
-}
-
+/**
+ * Default SSH executor for remote bash scripts (setup / teardown).
+ * Uses the **`ssh2`** package (installed via `bun install`); no system `sshpass` binary.
+ */
 export function buildSshExecUsingSpawn(): SshExecFn {
   return (args) =>
     new Promise((resolve, reject) => {
-      const sshArgs = ["-o", "StrictHostKeyChecking=accept-new", "-p", String(args.port), `${args.user}@${args.host}`, "bash", "-s"];
-      if (args.knownHostsFile) {
-        sshArgs.unshift("-o", `UserKnownHostsFile=${args.knownHostsFile}`, "-o", "StrictHostKeyChecking=yes");
-        const idx = sshArgs.indexOf("StrictHostKeyChecking=accept-new");
-        if (idx !== -1) sshArgs.splice(idx, 1);
+      const conn = new Client();
+      let settled = false;
+
+      function finish(err: Error | null, result: SshExecResult | null) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          conn.end();
+        } catch {
+          /* ignore */
+        }
+        if (err) {
+          reject(err);
+        } else if (result) {
+          resolve(result);
+        }
       }
 
-      const child = spawn("sshpass", ["-e", "ssh", ...sshArgs], {
-        env: { ...process.env, SSHPASS: args.password },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(new Error(`SSH timed out after ${args.timeoutMs}ms`));
+        finish(new Error(`SSH timed out after ${args.timeoutMs}ms`), null);
       }, args.timeoutMs);
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
+      conn.on("ready", () => {
+        conn.exec("bash -s", (err: Error | undefined, stream: StreamLike) => {
+          if (err) {
+            finish(err, null);
+            return;
+          }
 
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+          let stdout = "";
+          let stderr = "";
 
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({
-          code: code ?? 1,
-          stdout: truncate(stdout),
-          stderr: truncate(stderr),
+          stream.on("data", (chunk: Buffer | string) => {
+            stdout += typeof chunk === "string" ? chunk : chunk.toString();
+          });
+          stream.stderr.on("data", (chunk: Buffer | string) => {
+            stderr += typeof chunk === "string" ? chunk : chunk.toString();
+          });
+
+          let exitHandled = false;
+          function resolveWithCode(code: number) {
+            if (exitHandled) return;
+            exitHandled = true;
+            finish(null, {
+              code,
+              stdout: truncate(stdout),
+              stderr: truncate(stderr),
+            });
+          }
+
+          stream.on("exit", (code: number | null | undefined, signal?: string) => {
+            if (typeof code === "number" && code >= 0) {
+              resolveWithCode(code);
+              return;
+            }
+            if (typeof signal === "string" && signal.length > 0) {
+              resolveWithCode(1);
+              return;
+            }
+            resolveWithCode(0);
+          });
+
+          stream.on("close", () => {
+            if (!exitHandled) {
+              resolveWithCode(0);
+            }
+          });
+
+          stream.on("error", (streamErr: Error) => {
+            finish(streamErr, null);
+          });
+
+          stream.write(args.remoteScript);
+          stream.end();
         });
       });
 
-      child.stdin?.write(args.remoteScript);
-      child.stdin?.end();
+      conn.on("error", (e: Error) => {
+        finish(e, null);
+      });
+
+      conn.connect(
+        buildSsh2ConnectOptions({
+          host: args.host,
+          port: args.port,
+          username: args.user,
+          password: args.password,
+          knownHostsFile: args.knownHostsFile,
+          readyTimeoutMs: Math.min(SSH_READY_TIMEOUT_MS, args.timeoutMs),
+        }),
+      );
     });
 }
+
+type StreamLike = {
+  on: (event: string, cb: (...args: unknown[]) => void) => StreamLike;
+  stderr: { on: (event: string, cb: (...args: unknown[]) => void) => unknown };
+  write: (data: string) => void;
+  end: () => void;
+};

@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { buildTeardownPhases } from "./teardownPhases";
 import type { ProfileSetupRow } from "./setupRunner";
 import type { SshExecFn } from "./sshExec";
-import { buildSshExecUsingSpawn, sshpassAvailable } from "./sshExec";
+import { buildSshExecUsingSpawn } from "./sshExec";
 
 export type TeardownPhaseResult = {
   id: string;
@@ -63,7 +63,6 @@ export async function executeProfileTeardown(options: {
   sshExec?: SshExecFn;
 }): Promise<ExecuteProfileTeardownOutcome> {
   const { db, env, profileId } = options;
-  const sshExecProvided = options.sshExec !== undefined;
   const sshExec = options.sshExec ?? buildSshExecUsingSpawn();
 
   const row = getProfileForTeardown(db, profileId);
@@ -89,10 +88,6 @@ export async function executeProfileTeardown(options: {
       row.last_setup_error.trim() !== "");
   if (!eligible) {
     throw Object.assign(new Error("clear_server_not_eligible"), { status: 400 as const });
-  }
-
-  if (!sshExecProvided && !sshpassAvailable()) {
-    throw Object.assign(new Error("sshpass_missing"), { status: 503 as const });
   }
 
   const sshPassword = await decryptVpnPassword(

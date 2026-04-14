@@ -239,15 +239,6 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           );
         }
       }
-      if (err.status === 503) {
-        return c.json(
-          {
-            error:
-              "sshpass is required on the VPN Manager host for SSH password authentication (install the sshpass package)",
-          },
-          503,
-        );
-      }
       throw e;
     }
   });
@@ -299,15 +290,6 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         return c.json(
           { error: "Nothing to clear: profile is pending and setup did not record a failure." },
           400,
-        );
-      }
-      if (err.status === 503) {
-        return c.json(
-          {
-            error:
-              "sshpass is required on the VPN Manager host for SSH password authentication (install the sshpass package)",
-          },
-          503,
         );
       }
       throw e;

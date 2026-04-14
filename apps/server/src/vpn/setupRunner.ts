@@ -9,7 +9,7 @@ import {
   PLACEHOLDER_WEB_BASE_PATH,
 } from "./setupPhases";
 import type { SshExecFn } from "./sshExec";
-import { buildSshExecUsingSpawn, sshpassAvailable } from "./sshExec";
+import { buildSshExecUsingSpawn } from "./sshExec";
 
 export type SetupPhaseResult = {
   id: string;
@@ -97,7 +97,6 @@ export async function executeProfileSetup(options: {
   sshExec?: SshExecFn;
 }): Promise<ExecuteProfileSetupOutcome> {
   const { db, env, profileId } = options;
-  const sshExecProvided = options.sshExec !== undefined;
   const sshExec = options.sshExec ?? buildSshExecUsingSpawn();
 
   const row = getProfileForSetup(db, profileId);
@@ -134,10 +133,6 @@ export async function executeProfileSetup(options: {
 
   if (!env.acmeEmail) {
     throw Object.assign(new Error("acme_email_required"), { status: 400 as const });
-  }
-
-  if (!sshExecProvided && !sshpassAvailable()) {
-    throw Object.assign(new Error("sshpass_missing"), { status: 503 as const });
   }
 
   const sshPassword = await decryptVpnPassword(
