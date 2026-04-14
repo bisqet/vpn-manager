@@ -119,6 +119,16 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     return c.json(rows.map(toProfileDto));
   });
 
+  /** Browser SSH cannot read JSON from failed WS upgrades; check this before opening the socket. */
+  app.get("/ssh-terminal/preflight", (c) => {
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
+    if (userId === null) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    return c.json({ sshTerminalEnabled: env.vpnSshEnabled });
+  });
+
   app.post("/", async (c) => {
     const body = await readJson(c);
     const parsed = vpnProfileCreate.safeParse(body);
@@ -298,6 +308,34 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     return c.json(toProfileDto(updated!));
   });
 
+  function deleteVpnProfileWithHopCleanup(db: Database, id: number) {
+    const affectedRows = db
+      .query<{ chain_id: number }, [number]>("SELECT DISTINCT chain_id FROM chain_hops WHERE vpn_profile_id = ?")
+      .all(id);
+    const affectedChainIds = affectedRows.map((r) => r.chain_id);
+
+    db.query("DELETE FROM chain_hops WHERE vpn_profile_id = ?").run(id);
+
+    for (const chainId of affectedChainIds) {
+      const remaining = db
+        .query<{ id: number }, [number]>(
+          "SELECT id FROM chain_hops WHERE chain_id = ? ORDER BY position ASC, id ASC",
+        )
+        .all(chainId);
+
+      if (remaining.length === 0) {
+        db.query("DELETE FROM chains WHERE id = ?").run(chainId);
+        continue;
+      }
+
+      for (let i = 0; i < remaining.length; i++) {
+        db.query("UPDATE chain_hops SET position = ? WHERE id = ?").run(i, remaining[i].id);
+      }
+    }
+
+    db.query("DELETE FROM vpn_profiles WHERE id = ?").run(id);
+  }
+
   app.delete("/:id", (c) => {
     const id = parseId(c.req.param("id"));
     if (id === null) {
@@ -307,6 +345,23 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     const existing = getProfileById(db, id);
     if (!existing) {
       return c.json({ error: "Profile not found" }, 404);
+    }
+
+    const rawForce = c.req.query("force");
+    if (rawForce !== undefined && rawForce !== "true" && rawForce !== "1") {
+      return c.json({ error: "Invalid force parameter" }, 400);
+    }
+
+    if (rawForce === "true" || rawForce === "1") {
+      db.exec("BEGIN");
+      try {
+        deleteVpnProfileWithHopCleanup(db, id);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+      return c.json({ ok: true });
     }
 
     try {
