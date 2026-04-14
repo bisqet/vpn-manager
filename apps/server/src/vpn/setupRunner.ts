@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { decryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { getAppSettings } from "../db/appSettings";
@@ -11,6 +10,7 @@ import {
 } from "./setupPhases";
 import type { SshExecFn } from "./sshExec";
 import { buildSshExecUsingSpawn } from "./sshExec";
+import { runLiveSetupPhases } from "./setupLivePhaseLoop";
 
 export type SetupPhaseResult = {
   id: string;
@@ -27,7 +27,6 @@ export type SetupResult =
 
 type SetupEnv = Pick<Env, "masterKey">;
 
-const PHASE_TIMEOUT_MS = 600_000;
 const XUI_LOCAL_PORT = 2053;
 
 function randomAlnum(length: number): string {
@@ -152,74 +151,25 @@ export async function executeProfileSetup(options: {
     webBasePath,
   });
 
-  const results: SetupPhaseResult[] = [];
-
-  for (const phase of phases) {
-    let res: { code: number; stdout: string; stderr: string };
-    try {
-      res = await sshExec({
-        host: row.host,
-        port: row.ssh_port,
-        user: row.ssh_user,
-        password: sshPassword,
-        remoteScript: phase.script,
-        timeoutMs: PHASE_TIMEOUT_MS,
-        knownHostsFile: settings.sshKnownHostsFile ?? undefined,
-      });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      db.query(
-        `UPDATE vpn_profiles SET last_setup_error = ?, last_setup_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
-      ).run(message, profileId);
-      results.push({
-        id: phase.id,
-        title: phase.title,
-        script: phase.script,
-        stdout: "",
-        stderr: message,
-        code: 1,
-      });
-      const updated = getProfileForSetup(db, profileId)!;
-      return { outcome: "live-failed", profileRow: updated, setup: { mode: "live", phases: results } };
-    }
-
-    results.push({
-      id: phase.id,
-      title: phase.title,
-      script: phase.script,
-      stdout: res.stdout,
-      stderr: res.stderr,
-      code: res.code,
-    });
-
-    if (res.code !== 0) {
-      const errSummary = `Phase ${phase.id} failed (exit ${res.code})`;
-      db.query(
-        `UPDATE vpn_profiles SET last_setup_error = ?, last_setup_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
-      ).run(`${errSummary}\n${res.stderr}`.slice(0, 4000), profileId);
-      const updated = getProfileForSetup(db, profileId)!;
-      return { outcome: "live-failed", profileRow: updated, setup: { mode: "live", phases: results } };
-    }
-  }
-
-  const { ciphertext, nonce } = await encryptXuiSecretsJson(env.masterKey, {
-    v: 1,
+  const neverAborted = new AbortController();
+  const live = await runLiveSetupPhases({
+    db,
+    env,
+    profileId,
+    row: { host: row.host, ssh_port: row.ssh_port, ssh_user: row.ssh_user },
+    phases,
     adminUsername,
     adminPassword,
+    webBasePath,
+    sshPassword,
+    exec: sshExec,
+    knownHostsFile: settings.sshKnownHostsFile ?? undefined,
+    signal: neverAborted.signal,
   });
 
-  db.query(
-    `UPDATE vpn_profiles SET
-      operational_status = 'working',
-      xui_secrets_ciphertext = ?,
-      xui_secrets_nonce = ?,
-      xui_web_base_path = ?,
-      last_setup_error = NULL,
-      last_setup_at = datetime('now'),
-      updated_at = datetime('now')
-    WHERE id = ?`,
-  ).run(ciphertext, nonce, webBasePath, profileId);
-
   const updated = getProfileForSetup(db, profileId)!;
-  return { outcome: "live-success", profileRow: updated, setup: { mode: "live", phases: results } };
+  if (live.outcome === "live-failed") {
+    return { outcome: "live-failed", profileRow: updated, setup: { mode: "live", phases: live.phases } };
+  }
+  return { outcome: "live-success", profileRow: updated, setup: { mode: "live", phases: live.phases } };
 }

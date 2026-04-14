@@ -2,7 +2,7 @@ const BS = "\\";
 const DQ = '"';
 const DOLLAR = "$";
 
-/** Default phase timeout (matches `PHASE_TIMEOUT_MS` in `setupRunner.ts`). */
+/** Default phase timeout (matches the live phase loop literal in `setupLivePhaseLoop.ts`). */
 export const SETUP_PHASE_TIMEOUT_MS = 600_000;
 
 const CAPTURE_MAX_BYTES = 16 * 1024;
