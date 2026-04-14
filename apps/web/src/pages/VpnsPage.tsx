@@ -270,6 +270,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const [sessionKey, setSessionKey] = useState(0);
   const [disconnected, setDisconnected] = useState(false);
+  const [disconnectHint, setDisconnectHint] = useState<string | null>(null);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -308,6 +309,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
     fitAddon.fit();
 
     setDisconnected(false);
+    setDisconnectHint(null);
 
     const encoder = new TextEncoder();
     terminal.onData((data) => {
@@ -328,8 +330,20 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
       }
     };
 
-    ws.onclose = () => setDisconnected(true);
-    ws.onerror = () => setDisconnected(true);
+    ws.onclose = (ev) => {
+      if (ev.code !== 1000) {
+        setDisconnectHint(
+          "Connection closed before the terminal started. For dev: run the API on port 3000 and ensure Vite proxies WebSockets. On the server: set VPN_SSH_ENABLED=true in apps/server/.env and restart.",
+        );
+      }
+      setDisconnected(true);
+    };
+    ws.onerror = () => {
+      setDisconnectHint(
+        "WebSocket error (often the API is down, VPN_SSH_ENABLED is false, or the dev proxy is not upgrading WS). Check the browser network tab.",
+      );
+      setDisconnected(true);
+    };
 
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     terminal.onResize(({ cols, rows }) => {
@@ -376,6 +390,11 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
           {disconnected ? (
             <div style={sshDisconnectedOverlayStyle}>
               <span>Disconnected</span>
+              {disconnectHint ? (
+                <p style={{ margin: "8px 0 0", maxWidth: "420px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}>
+                  {disconnectHint}
+                </p>
+              ) : null}
               <button
                 onClick={() => setSessionKey((k) => k + 1)}
                 style={primaryButtonStyle}
