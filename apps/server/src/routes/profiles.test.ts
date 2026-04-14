@@ -5,6 +5,7 @@ import { decryptVpnPassword, encryptVpnPassword } from "../crypto/vpnSecret";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
+import { buildPanelHttpsUrl } from "../net/panelAddress";
 import type { SshExecFn } from "../vpn/sshExec";
 
 type ProfileRow = {
@@ -144,6 +145,7 @@ describe("profilesRoutes", () => {
       operationalStatus: "pending",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      panelUrl: null,
     });
     expect(created.sshPassword).toBeUndefined();
 
@@ -192,6 +194,7 @@ describe("profilesRoutes", () => {
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      panelUrl: null,
     });
 
     const storedAfterLabelPatch = db
@@ -226,6 +229,7 @@ describe("profilesRoutes", () => {
       operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      panelUrl: null,
     });
     expect(updatedWithPassword.sshPassword).toBeUndefined();
 
@@ -435,6 +439,91 @@ describe("profilesRoutes", () => {
       .get();
     expect(row?.operational_status).toBe("working");
     expect(row?.xui_web_base_path).toBeTruthy();
+  });
+
+  test("GET /api/profiles returns panelUrl null without session when profile working", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Live",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+
+    const listRes = await app.request("/api/profiles");
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as { panelUrl: string | null }[];
+    expect(listed[0]!.panelUrl).toBeNull();
+  });
+
+  test("GET /api/profiles returns panelUrl when session and working", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Live",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+
+    const dbRow = db
+      .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
+        "SELECT panel_hostname, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
+    expect(dbRow).toBeDefined();
+
+    const listRes = await app.request("/api/profiles", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as { panelUrl: string | null }[];
+    expect(listed[0]!.panelUrl).toBe(
+      buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path),
+    );
   });
 
   test("POST /api/profiles/:id/setup returns 409 when already working", async () => {

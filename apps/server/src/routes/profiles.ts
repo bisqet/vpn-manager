@@ -8,7 +8,7 @@ import { SESSION_COOKIE } from "../auth/cookie";
 import { getSessionUserId } from "../auth/session";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
-import { resolvePanelHostname } from "../net/panelAddress";
+import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
 import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
@@ -24,6 +24,7 @@ type VpnProfileRow = {
   ssh_user: string;
   operational_status: string;
   panel_hostname: string;
+  xui_web_base_path: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -40,7 +41,11 @@ export type ProfilesRoutesOptions = {
   upgradeWebSocket?: UpgradeWebSocket;
 };
 
-function toProfileDto(row: VpnProfileRow) {
+function toProfileDto(row: VpnProfileRow, userId: number | null) {
+  const panelUrl =
+    userId !== null && row.operational_status === "working"
+      ? buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path)
+      : null;
   return {
     id: row.id,
     label: row.label,
@@ -51,6 +56,7 @@ function toProfileDto(row: VpnProfileRow) {
     operationalStatus: row.operational_status as "pending" | "working",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    panelUrl,
   };
 }
 
@@ -83,6 +89,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           ssh_user,
           operational_status,
           panel_hostname,
+          xui_web_base_path,
           ssh_password_ciphertext,
           ssh_password_nonce,
           created_at,
@@ -99,6 +106,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
   const uw = options.upgradeWebSocket ?? upgradeWebSocket;
 
   app.get("/", (c) => {
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
     const rows = db
       .query<VpnProfileRow>(
         `SELECT
@@ -109,6 +118,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           ssh_user,
           operational_status,
           panel_hostname,
+          xui_web_base_path,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -116,7 +126,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       )
       .all();
 
-    return c.json(rows.map(toProfileDto));
+    return c.json(rows.map((row) => toProfileDto(row, userId)));
   });
 
   /** Browser SSH cannot read JSON from failed WS upgrades; check this before opening the socket. */
@@ -161,7 +171,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       .run(label, hostTrimmed, sshPort, sshUser, ciphertext, nonce, resolved.panel);
 
     const created = getProfileById(db, Number(result.lastInsertRowid));
-    return c.json(toProfileDto(created!), 201);
+    const sessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
+    return c.json(toProfileDto(created!, sessionUserId), 201);
   });
 
   app.post("/:id/setup", async (c) => {
@@ -183,9 +194,10 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         sshExec: options.sshExec,
       });
 
+      const setupSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
       if (result.outcome === "dry-run") {
         return c.json({
-          profile: toProfileDto(result.profileRow as VpnProfileRow),
+          profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
           setup: result.setup,
         });
       }
@@ -194,7 +206,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         return c.json(
           {
             error: "VPN setup failed",
-            profile: toProfileDto(result.profileRow as VpnProfileRow),
+            profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
             setup: result.setup,
           },
           500,
@@ -202,7 +214,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       }
 
       return c.json({
-        profile: toProfileDto(result.profileRow as VpnProfileRow),
+        profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
         setup: result.setup,
       });
     } catch (e: unknown) {
@@ -305,7 +317,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     ).run(nextStatus, id);
 
     const updated = getProfileById(db, id);
-    return c.json(toProfileDto(updated!));
+    const patchSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
+    return c.json(toProfileDto(updated!, patchSessionUserId));
   });
 
   function deleteVpnProfileWithHopCleanup(db: Database, id: number) {
