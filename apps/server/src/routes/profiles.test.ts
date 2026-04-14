@@ -286,6 +286,75 @@ describe("profilesRoutes", () => {
     });
   });
 
+  test("force-deletes profile, removes hops, renumbers remaining hops, removes empty chains", async () => {
+    const app = createApp(db, env);
+
+    for (const body of [
+      { label: "A", host: "a.example.com", sshPort: 22, sshUser: "u", sshPassword: "p", panelHostname: "panel.a.example.com" },
+      { label: "B", host: "b.example.com", sshPort: 22, sshUser: "u", sshPassword: "p", panelHostname: "panel.b.example.com" },
+    ]) {
+      const res = await app.request("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: `${SESSION_COOKIE}=session-token` },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    db.query("INSERT INTO chains (name) VALUES (?)").run("Multi");
+    db.query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)").run(1, 0, 1);
+    db.query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)").run(1, 1, 2);
+
+    const forceRes = await app.request("/api/profiles/1?force=true", {
+      method: "DELETE",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(forceRes.status).toBe(200);
+    expect(await forceRes.json()).toEqual({ ok: true });
+
+    expect(db.query("SELECT id FROM vpn_profiles WHERE id = ?").get(1)).toBeNull();
+
+    const hops = db
+      .query<{ chain_id: number; position: number; vpn_profile_id: number }, []>(
+        "SELECT chain_id, position, vpn_profile_id FROM chain_hops ORDER BY chain_id, position",
+      )
+      .all();
+    expect(hops).toEqual([{ chain_id: 1, position: 0, vpn_profile_id: 2 }]);
+
+    expect(db.query("SELECT id FROM chains WHERE id = ?").get(1)).not.toBeNull();
+  });
+
+  test("force-deletes profile and removes chain when it was the only hop", async () => {
+    const app = createApp(db, env);
+
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: `${SESSION_COOKIE}=session-token` },
+      body: JSON.stringify({
+        label: "Solo",
+        host: "solo.example.com",
+        sshPort: 22,
+        sshUser: "u",
+        sshPassword: "p",
+        panelHostname: "panel.solo.example.com",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    db.query("INSERT INTO chains (name) VALUES (?)").run("Only");
+    db.query("INSERT INTO chain_hops (chain_id, position, vpn_profile_id) VALUES (?, ?, ?)").run(1, 0, 1);
+
+    const forceRes = await app.request("/api/profiles/1?force=true", {
+      method: "DELETE",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(forceRes.status).toBe(200);
+
+    expect(db.query("SELECT id FROM vpn_profiles WHERE id = ?").get(1)).toBeNull();
+    expect(db.query("SELECT id FROM chain_hops WHERE chain_id = ?", [1]).all()).toEqual([]);
+    expect(db.query("SELECT id FROM chains WHERE id = ?", [1]).get(1)).toBeNull();
+  });
+
   test("POST /api/profiles/:id/setup returns dry-run when VPN_SSH_ENABLED is false", async () => {
     const app = createApp(db, env);
 
@@ -509,5 +578,18 @@ describe("profilesRoutes", () => {
       },
     });
     expect(res.status).toBe(404);
+  });
+
+  test("GET /api/profiles/ssh-terminal/preflight returns sshTerminalEnabled", async () => {
+    const app = createApp(db, { ...env, vpnSshEnabled: false });
+    const authed = await app.request("/api/profiles/ssh-terminal/preflight", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(authed.status).toBe(200);
+    const body = await authed.json();
+    expect(body.sshTerminalEnabled).toBe(false);
+
+    const anon = await app.request("/api/profiles/ssh-terminal/preflight");
+    expect(anon.status).toBe(401);
   });
 });
