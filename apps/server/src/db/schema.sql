@@ -62,3 +62,11 @@ CREATE TABLE IF NOT EXISTS rules (
   action TEXT NOT NULL CHECK (action IN ('direct','use_chain','block')),
   UNIQUE (routing_profile_id, position)
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  acme_email TEXT NOT NULL DEFAULT '',
+  vpn_ssh_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vpn_ssh_enabled IN (0, 1)),
+  ssh_known_hosts_file TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
