@@ -47,6 +47,14 @@ case "$ARCH" in
 esac`;
 }
 
+const caddyConfPath = "/etc/caddy/conf.d/vpn-manager-3x-ui.caddy";
+
+/**
+ * Line included in `/etc/caddy/Caddyfile` so snippet files in `conf.d` load.
+ * Setup appends this line when missing; teardown removes one matching line.
+ */
+export const CADDYFILE_CONF_D_IMPORT_LINE = "import /etc/caddy/conf.d/*.caddy";
+
 export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
   const { panelHostname, acmeEmail, xuiLocalPort, adminUsername, adminPassword, webBasePath } = ctx;
   const webPathForUrl = webBasePath.startsWith("/") ? webBasePath : `/${webBasePath}`;
@@ -132,7 +140,6 @@ apt-get install -y -qq caddy
 `,
   };
 
-  const caddyConfPath = "/etc/caddy/conf.d/vpn-manager-3x-ui.caddy";
   const configureCaddy: SetupPhase = {
     id: "configure_caddy",
     title: "Configure Caddy (HTTPS reverse proxy to localhost panel)",
@@ -147,8 +154,9 @@ ${caddySiteKey} {
 \treverse_proxy 127.0.0.1:${xuiLocalPort}
 }
 CADDY_EOF
-if ! grep -q 'import /etc/caddy/conf.d' /etc/caddy/Caddyfile 2>/dev/null; then
-  echo 'import /etc/caddy/conf.d/*.caddy' >> /etc/caddy/Caddyfile
+LINE='${CADDYFILE_CONF_D_IMPORT_LINE}'
+if ! grep -qF "$LINE" /etc/caddy/Caddyfile 2>/dev/null; then
+  printf '%s\\n' "$LINE" >> /etc/caddy/Caddyfile
 fi
 caddy fmt --overwrite ${caddyConfPath} 2>/dev/null || true
 systemctl enable caddy

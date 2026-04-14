@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildSetupPhases, PLACEHOLDER_ADMIN_PASS, PLACEHOLDER_ADMIN_USER } from "./setupPhases";
+import {
+  buildSetupPhases,
+  CADDYFILE_CONF_D_IMPORT_LINE,
+  PLACEHOLDER_ADMIN_PASS,
+  PLACEHOLDER_ADMIN_USER,
+} from "./setupPhases";
 
 describe("buildSetupPhases", () => {
   test("includes panel hostname and placeholders in scripts", () => {
@@ -18,6 +23,22 @@ describe("buildSetupPhases", () => {
     expect(joined).toContain(PLACEHOLDER_ADMIN_PASS);
     expect(joined).toContain("127.0.0.1");
     expect(joined).toContain("listenIP");
+  });
+
+  test("configure_caddy script includes the shared Caddyfile import line exactly once", () => {
+    const phases = buildSetupPhases({
+      panelHostname: "panel.example.com",
+      acmeEmail: "ops@example.com",
+      xuiLocalPort: 2053,
+      adminUsername: "u1",
+      adminPassword: "p1",
+      webBasePath: "abc",
+    });
+    const configureCaddy = phases.find((p) => p.id === "configure_caddy");
+    expect(configureCaddy).toBeDefined();
+    const script = configureCaddy!.script;
+    const occurrences = script.split(CADDYFILE_CONF_D_IMPORT_LINE).length - 1;
+    expect(occurrences).toBe(1);
   });
 
   test("phase ids are stable", () => {
