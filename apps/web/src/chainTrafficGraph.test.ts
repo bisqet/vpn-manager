@@ -27,8 +27,7 @@ describe("buildChainRoutingGraph", () => {
       expect.objectContaining({ sourceId: "entry", targetId: "hop:10" }),
       expect.objectContaining({ sourceId: "hop:10", targetId: "hop:11" }),
     ]);
-    expect(graph.nodes.some((n) => n.id === "sink:direct")).toBe(true);
-    expect(graph.nodes.some((n) => n.id === "sink:block")).toBe(true);
+    expect(graph.nodes.every((n) => !n.id.startsWith("sink:"))).toBe(true);
     expect(graph.truncatedRuleCountByHopId).toEqual({});
   });
 
@@ -45,7 +44,7 @@ describe("buildChainRoutingGraph", () => {
       expect.objectContaining({
         id: "link:1:default",
         sourceId: "hop:1",
-        targetId: "sink:direct",
+        targetId: "sink:1:direct",
         variant: "direct",
       }),
     );
@@ -80,5 +79,25 @@ describe("buildChainRoutingGraph", () => {
     const graph = buildChainRoutingGraph(hops, routing);
     expect(graph.links.filter((l) => l.id.startsWith("link:9:rule:")).length).toBe(8);
     expect(graph.truncatedRuleCountByHopId[9]).toBe(2);
+  });
+
+  test("per-hop sinks: second hop block uses sink on that hop only", () => {
+    const hops = [hop(1, 0, "A"), hop(2, 1, "B")];
+    const routing = new Map<number, RoutingProfileInput>();
+    routing.set(2, {
+      chainHopId: 2,
+      defaultAction: "block",
+      rules: [],
+    });
+    const graph = buildChainRoutingGraph(hops, routing);
+    expect(graph.nodes.some((n) => n.id === "sink:2:block")).toBe(true);
+    expect(graph.nodes.some((n) => n.id === "sink:1:block")).toBe(false);
+    expect(graph.links).toContainEqual(
+      expect.objectContaining({
+        sourceId: "hop:2",
+        targetId: "sink:2:block",
+        variant: "block",
+      }),
+    );
   });
 });

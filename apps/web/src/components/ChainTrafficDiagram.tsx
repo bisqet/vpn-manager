@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 import {
   buildChainRoutingGraph,
+  hopNodeId,
   type ChainHopInput,
   type RoutingProfileInput,
 } from "../chainTrafficGraph";
@@ -48,8 +49,7 @@ function layoutNodes(
 ): { positions: Map<string, { x: number; y: number }>; height: number } {
   const padding = 20;
   const hopY = 72;
-  const sinkY1 = hopY + 88;
-  const sinkY2 = hopY + 128;
+  const sinkRowY = hopY + 82;
   const hopOrder = orderedHopIdsFromBackbone(graph.links);
   const n = hopOrder.length;
   const usable = Math.max(200, width - 2 * padding);
@@ -60,14 +60,42 @@ function layoutNodes(
   positions.set("entry", { x: padding + colW * 0.5, y: hopY });
 
   hopOrder.forEach((hid, i) => {
-    positions.set(`hop:${hid}`, { x: padding + colW * (i + 1.5), y: hopY });
+    positions.set(hopNodeId(hid), { x: padding + colW * (i + 1.5), y: hopY });
   });
 
-  const sinksX = Math.min(width - padding - 40, padding + colW * (n + 1.5));
-  positions.set("sink:direct", { x: sinksX, y: sinkY1 });
-  positions.set("sink:block", { x: sinksX, y: sinkY2 });
+  for (const node of graph.nodes) {
+    if (node.kind !== "sink_direct" && node.kind !== "sink_block") {
+      continue;
+    }
+    const hid = node.chainHopId;
+    if (hid === undefined) {
+      continue;
+    }
+    const hopPos = positions.get(hopNodeId(hid));
+    if (!hopPos) {
+      continue;
+    }
 
-  const height = Math.max(220, sinkY2 + 56);
+    const directId = `sink:${hid}:direct`;
+    const blockId = `sink:${hid}:block`;
+    const hasDirect = graph.nodes.some((x) => x.id === directId);
+    const hasBlock = graph.nodes.some((x) => x.id === blockId);
+
+    if (node.kind === "sink_direct") {
+      if (hasDirect && hasBlock) {
+        positions.set(node.id, { x: hopPos.x - 52, y: sinkRowY });
+      } else {
+        positions.set(node.id, { x: hopPos.x, y: sinkRowY });
+      }
+    } else if (hasDirect && hasBlock) {
+      positions.set(node.id, { x: hopPos.x + 52, y: sinkRowY });
+    } else {
+      positions.set(node.id, { x: hopPos.x, y: sinkRowY });
+    }
+  }
+
+  const sinkBottom = sinkRowY + 22;
+  const height = Math.max(248, sinkBottom + 52);
   return { positions, height };
 }
 
@@ -189,16 +217,16 @@ export function ChainTrafficDiagram({
       .x((d) => d[0])
       .y((d) => d[1]);
 
-    for (const link of graph.links) {
+    graph.links.forEach((link, linkIndex) => {
       const s = positions.get(link.sourceId);
       const t = positions.get(link.targetId);
       if (!s || !t) {
-        continue;
+        return;
       }
       const midY =
         link.variant === "backbone"
           ? s.y
-          : s.y + 22 + (Math.abs(link.id.charCodeAt(link.id.length - 1) || 0) % 5) * 6;
+          : s.y + 18 + (linkIndex % 6) * 7;
       const pathData: [number, number][] =
         link.variant === "backbone"
           ? [
@@ -229,7 +257,7 @@ export function ChainTrafficDiagram({
           .attr("font-size", 9)
           .text(link.label.length > 36 ? `${link.label.slice(0, 35)}…` : link.label);
       }
-    }
+    });
 
     for (const node of graph.nodes) {
       const p = positions.get(node.id);
@@ -291,12 +319,16 @@ export function ChainTrafficDiagram({
             .text("Routing unavailable");
         }
       } else {
+        const hopLabel =
+          node.chainHopId !== undefined
+            ? graph.nodes.find((x) => x.kind === "hop" && x.chainHopId === node.chainHopId)?.label
+            : undefined;
         nodeGroup
           .append("rect")
           .attr("x", p.x - 44)
           .attr("y", p.y - 14)
           .attr("width", 88)
-          .attr("height", 28)
+          .attr("height", hopLabel ? 38 : 28)
           .attr("rx", 8)
           .attr("fill", node.kind === "sink_direct" ? "#ecfdf5" : "#fef2f2")
           .attr("stroke", node.kind === "sink_direct" ? "#a7f3d0" : "#fecaca");
@@ -308,6 +340,16 @@ export function ChainTrafficDiagram({
           .attr("fill", COLORS.text)
           .attr("font-size", 11)
           .text(node.label);
+        if (hopLabel) {
+          nodeGroup
+            .append("text")
+            .attr("x", p.x)
+            .attr("y", p.y + 22)
+            .attr("text-anchor", "middle")
+            .attr("fill", COLORS.muted)
+            .attr("font-size", 8)
+            .text(`hop: ${hopLabel.length > 12 ? `${hopLabel.slice(0, 11)}…` : hopLabel}`);
+        }
       }
     }
 

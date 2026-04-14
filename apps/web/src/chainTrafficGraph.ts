@@ -29,6 +29,7 @@ export type GraphNode = {
   kind: GraphNodeKind;
   label: string;
   sublabel?: string;
+  /** Hop id for hop nodes; owning hop id for per-hop sink nodes */
   chainHopId?: number;
 };
 
@@ -51,8 +52,16 @@ export type ChainTrafficGraph = {
 const MAX_RULES_PER_HOP = 8;
 const MAX_LABEL_LEN = 40;
 
-function hopNodeId(chainHopId: number): string {
+export function hopNodeId(chainHopId: number): string {
   return `hop:${chainHopId}`;
+}
+
+function sinkDirectId(chainHopId: number): string {
+  return `sink:${chainHopId}:direct`;
+}
+
+function sinkBlockId(chainHopId: number): string {
+  return `sink:${chainHopId}:block`;
 }
 
 function truncateLabel(text: string): string {
@@ -76,9 +85,24 @@ function variantForAction(action: RuleAction): GraphLinkVariant {
   return "block";
 }
 
+function hopNeedsDirectSink(routing: RoutingProfileInput): boolean {
+  if (routing.defaultAction === "direct") {
+    return true;
+  }
+  return routing.rules.some((rule) => rule.action === "direct");
+}
+
+function hopNeedsBlockSink(routing: RoutingProfileInput): boolean {
+  if (routing.defaultAction === "block") {
+    return true;
+  }
+  return routing.rules.some((rule) => rule.action === "block");
+}
+
 function targetForAction(
   action: RuleAction,
   nextHopId: number | null,
+  hopId: number,
 ): string | null {
   if (action === "use_chain") {
     if (nextHopId === null) {
@@ -87,9 +111,9 @@ function targetForAction(
     return hopNodeId(nextHopId);
   }
   if (action === "direct") {
-    return "sink:direct";
+    return sinkDirectId(hopId);
   }
-  return "sink:block";
+  return sinkBlockId(hopId);
 }
 
 export function buildChainRoutingGraph(
@@ -99,11 +123,7 @@ export function buildChainRoutingGraph(
   const sorted = [...hops].sort((a, b) => a.position - b.position);
   const truncatedRuleCountByHopId: Record<number, number> = {};
 
-  const nodes: GraphNode[] = [
-    { id: "entry", kind: "entry", label: "Entry" },
-    { id: "sink:direct", kind: "sink_direct", label: "Direct" },
-    { id: "sink:block", kind: "sink_block", label: "Blocked" },
-  ];
+  const nodes: GraphNode[] = [{ id: "entry", kind: "entry", label: "Entry" }];
 
   for (const h of sorted) {
     nodes.push({
@@ -113,6 +133,43 @@ export function buildChainRoutingGraph(
       sublabel: `#${h.vpnProfileId}`,
       chainHopId: h.id,
     });
+  }
+
+  const sinkIdsAdded = new Set<string>();
+
+  const hopIndexById = new Map<number, number>();
+  sorted.forEach((h, i) => hopIndexById.set(h.id, i));
+
+  for (const h of sorted) {
+    const routing = routingByChainHopId.get(h.id);
+    if (!routing) {
+      continue;
+    }
+
+    if (hopNeedsDirectSink(routing)) {
+      const id = sinkDirectId(h.id);
+      if (!sinkIdsAdded.has(id)) {
+        sinkIdsAdded.add(id);
+        nodes.push({
+          id,
+          kind: "sink_direct",
+          label: "Direct",
+          chainHopId: h.id,
+        });
+      }
+    }
+    if (hopNeedsBlockSink(routing)) {
+      const id = sinkBlockId(h.id);
+      if (!sinkIdsAdded.has(id)) {
+        sinkIdsAdded.add(id);
+        nodes.push({
+          id,
+          kind: "sink_block",
+          label: "Blocked",
+          chainHopId: h.id,
+        });
+      }
+    }
   }
 
   const links: GraphLink[] = [];
@@ -134,9 +191,6 @@ export function buildChainRoutingGraph(
     }
   }
 
-  const hopIndexById = new Map<number, number>();
-  sorted.forEach((h, i) => hopIndexById.set(h.id, i));
-
   for (const h of sorted) {
     const routing = routingByChainHopId.get(h.id);
     if (!routing) {
@@ -153,8 +207,8 @@ export function buildChainRoutingGraph(
           ? hopNodeId(nextHopId)
           : null
         : routing.defaultAction === "direct"
-          ? "sink:direct"
-          : "sink:block";
+          ? sinkDirectId(h.id)
+          : sinkBlockId(h.id);
 
     if (defaultTarget !== null) {
       const variant =
@@ -176,7 +230,7 @@ export function buildChainRoutingGraph(
     }
 
     for (const rule of visibleRules) {
-      const tgt = targetForAction(rule.action, nextHopId);
+      const tgt = targetForAction(rule.action, nextHopId, h.id);
       if (tgt === null) {
         continue;
       }
