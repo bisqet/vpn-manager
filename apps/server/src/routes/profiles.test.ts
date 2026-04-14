@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SESSION_COOKIE } from "../auth/cookie";
-import { decryptVpnPassword } from "../crypto/vpnSecret";
+import { decryptVpnPassword, encryptVpnPassword } from "../crypto/vpnSecret";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
@@ -104,13 +104,13 @@ describe("profilesRoutes", () => {
     expect(res.status).toBe(400);
   });
 
-  test("requires auth for profile routes", async () => {
+  test("allows unauthenticated GET /api/profiles", async () => {
     const app = createApp(db, env);
 
     const res = await app.request("/api/profiles");
 
-    expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
   });
 
   test("creates, lists, updates, and deletes profiles without exposing passwords", async () => {
@@ -453,5 +453,61 @@ describe("profilesRoutes", () => {
     expect(patchRes.status).toBe(200);
     const body = await patchRes.json();
     expect(body.operationalStatus).toBe("working");
+  });
+
+  async function insertVpnProfileId1ForSsh(database: Database) {
+    const { ciphertext, nonce } = await encryptVpnPassword(env.masterKey, "pw");
+    database
+      .query(
+        `INSERT INTO vpn_profiles (id, label, host, ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce, panel_hostname, operational_status)
+         VALUES (1, 'Ssh', '127.0.0.1', 22, 'root', ?, ?, 'panel.test', 'pending')`,
+      )
+      .run(ciphertext, nonce);
+  }
+
+  test("GET /api/profiles/1/ssh without session returns 401", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    const res = await app.request("/api/profiles/1/ssh", {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/profiles/1/ssh with session when VPN_SSH_ENABLED false returns 403", async () => {
+    await insertVpnProfileId1ForSsh(db);
+    const app = createApp(db, { ...env, vpnSshEnabled: false });
+    const res = await app.request("/api/profiles/1/ssh", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("GET /api/profiles/abc/ssh with invalid id returns 400", async () => {
+    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    const res = await app.request("/api/profiles/abc/ssh", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /api/profiles/99/ssh with missing profile returns 404", async () => {
+    const app = createApp(db, { ...env, vpnSshEnabled: true });
+    const res = await app.request("/api/profiles/99/ssh", {
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+      },
+    });
+    expect(res.status).toBe(404);
   });
 });

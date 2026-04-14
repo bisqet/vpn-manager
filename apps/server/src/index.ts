@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { join, relative, resolve } from "node:path";
 import { Hono } from "hono";
-import { serveStatic } from "hono/bun";
+import { serveStatic, upgradeWebSocket, websocket } from "hono/bun";
 import { cors } from "hono/cors";
 import "./types";
 import { openDatabase } from "./db/client";
@@ -32,10 +32,13 @@ export function createApp(
 
   const api = new Hono();
   api.route("/auth", authRoutes(db));
+  api.route(
+    "/profiles",
+    profilesRoutes(db, env, { upgradeWebSocket, ...options?.profiles }),
+  );
 
   const authed = new Hono();
   authed.use("*", requireAuth(db));
-  authed.route("/profiles", profilesRoutes(db, env, options?.profiles ?? {}));
   authed.route("/chains", chainsRoutes(db));
   authed.route("/routing", routingRoutes(db));
   authed.route("/import", importRoutes(db, env));
@@ -96,7 +99,9 @@ export default {
   get port() {
     return getServerState().env.port;
   },
-  fetch(...args: Parameters<Hono["fetch"]>) {
-    return getServerState().app.fetch(...args);
+  fetch(req: Request, server: unknown) {
+    const { app } = getServerState();
+    return app.fetch(req, { server } as { server: unknown });
   },
+  websocket,
 };

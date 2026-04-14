@@ -1,11 +1,18 @@
 import type { Database } from "bun:sqlite";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { upgradeWebSocket } from "hono/bun";
+import { getCookie } from "hono/cookie";
+import type { UpgradeWebSocket } from "hono/ws";
+import { SESSION_COOKIE } from "../auth/cookie";
+import { getSessionUserId } from "../auth/session";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
 import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
+import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
+import { resolveProfileSshTerminal } from "../vpn/profileSshTerminalGate";
 import { executeProfileSetup } from "../vpn/setupRunner";
 import type { SshExecFn } from "../vpn/sshExec";
 
@@ -30,6 +37,7 @@ type ProfilesEnv = Pick<Env, "masterKey" | "vpnSshEnabled" | "acmeEmail" | "sshK
 
 export type ProfilesRoutesOptions = {
   sshExec?: SshExecFn;
+  upgradeWebSocket?: UpgradeWebSocket;
 };
 
 function toProfileDto(row: VpnProfileRow) {
@@ -88,6 +96,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
 
 export function profilesRoutes(db: Database, env: ProfilesEnv, options: ProfilesRoutesOptions = {}) {
   const app = new Hono();
+  const uw = options.upgradeWebSocket ?? upgradeWebSocket;
 
   app.get("/", (c) => {
     const rows = db
@@ -311,6 +320,55 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       throw error;
     }
   });
+
+  app.get(
+    "/:id/ssh",
+    async (c, next) => {
+      const upgrade = c.req.header("Upgrade");
+      if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+        return c.json({ error: "Expected WebSocket upgrade" }, 426);
+      }
+
+      const id = parseId(c.req.param("id"));
+      if (id === null) {
+        return c.json({ error: "Invalid VPN profile id" }, 400);
+      }
+
+      const token = getCookie(c, SESSION_COOKIE);
+      const userId = getSessionUserId(db, token);
+
+      const gate = await resolveProfileSshTerminal({
+        db,
+        masterKey: env.masterKey,
+        vpnSshEnabled: env.vpnSshEnabled,
+        userId,
+        profileId: id,
+      });
+
+      if (!gate.ok) {
+        const message =
+          gate.status === 401
+            ? "Unauthorized"
+            : gate.status === 403
+              ? "SSH is disabled on this server"
+              : gate.status === 400
+                ? "Invalid VPN profile id"
+                : "Profile not found";
+        return c.json({ error: message }, gate.status);
+      }
+
+      c.set("sshTerminalGate", gate);
+      await next();
+    },
+    uw((c) => {
+      const gate = c.get("sshTerminalGate");
+      return createProfileSshWebSocketHandlers({
+        row: gate.row,
+        sshPassword: gate.sshPassword,
+        env: { sshKnownHostsFile: env.sshKnownHostsFile },
+      });
+    }),
+  );
 
   return app;
 }

@@ -1,8 +1,12 @@
 import { z } from "zod";
+import type { ResolveProfileSshTerminalResult } from "./vpn/profileSshTerminalGate";
+
+type SshTerminalGateSuccess = Extract<ResolveProfileSshTerminalResult, { ok: true }>;
 
 declare module "hono" {
   interface ContextVariableMap {
     userId: number;
+    sshTerminalGate: SshTerminalGateSuccess;
   }
 }
 
