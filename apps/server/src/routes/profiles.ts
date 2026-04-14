@@ -233,12 +233,6 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         if (err.message === "panel_hostname_required") {
           return c.json({ error: "panelHostname is required before setup" }, 400);
         }
-        if (err.message === "acme_email_required") {
-          return c.json(
-            { error: "ACME_EMAIL is required on the server when VPN_SSH_ENABLED is true" },
-            400,
-          );
-        }
       }
       throw e;
     }

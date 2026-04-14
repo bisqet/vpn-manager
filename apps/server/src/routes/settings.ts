@@ -27,15 +27,8 @@ export function settingsRoutes(db: Database) {
     if (body.sshKnownHostsFile === null || typeof body.sshKnownHostsFile === "string") {
       patch.sshKnownHostsFile = body.sshKnownHostsFile as string | null;
     }
-    try {
-      const dto = patchAppSettings(db, patch);
-      return c.json(dto);
-    } catch (e) {
-      if (e instanceof Error && e.message === "acme_email_required_when_ssh_enabled") {
-        return c.json({ error: "ACME email is required when live SSH is enabled" }, 400);
-      }
-      throw e;
-    }
+    const dto = patchAppSettings(db, patch);
+    return c.json(dto);
   });
 
   return app;

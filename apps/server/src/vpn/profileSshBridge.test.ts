@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { createProfileSshWebSocketHandlers } from "./profileSshBridge";
 import type { WSContext } from "hono/ws";
 
@@ -76,8 +76,16 @@ class FakeClient {
     return this;
   }
 
+  /** When set, `connect` emits `error` instead of `ready` (for failure-path tests). */
+  static emitConnectError: Error | null = null;
+
   connect(config: unknown) {
     this.connectConfig = config;
+    const err = FakeClient.emitConnectError;
+    if (err) {
+      for (const cb of this.eventHandlers.get("error") ?? []) cb(err);
+      return;
+    }
     // Immediately emit "ready" so onOpen can proceed synchronously in tests
     for (const cb of this.eventHandlers.get("ready") ?? []) cb();
   }
@@ -159,6 +167,10 @@ function openHandlers(ws: FakeWs): {
 // ---------------------------------------------------------------------------
 
 describe("createProfileSshWebSocketHandlers", () => {
+  beforeEach(() => {
+    FakeClient.emitConnectError = null;
+  });
+
   test("binary data from stream stdout is forwarded to ws.send as Uint8Array", () => {
     const ws = makeFakeWs();
     const { client } = openHandlers(ws);
@@ -235,5 +247,14 @@ describe("createProfileSshWebSocketHandlers", () => {
     expect(cfg.port).toBe(ROW.ssh_port);
     expect(cfg.username).toBe(ROW.ssh_user);
     expect(cfg.password).toBe("hunter2");
+  });
+
+  test("ssh2 connection error closes WebSocket 1011 with truncated ssh2 message", () => {
+    FakeClient.emitConnectError = new Error("connect ETIMEDOUT 10.0.0.1:22");
+    const ws = makeFakeWs();
+    openHandlers(ws);
+    expect(ws.closed).toBe(true);
+    expect(ws.closeCode).toBe(1011);
+    expect(ws.closeReason).toBe("connect ETIMEDOUT 10.0.0.1:22");
   });
 });

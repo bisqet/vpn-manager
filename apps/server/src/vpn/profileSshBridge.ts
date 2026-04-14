@@ -5,6 +5,19 @@ import { buildSsh2ConnectOptions } from "./ssh2ConnectOptions";
 
 const IDLE_TIMEOUT_MS = 45 * 60 * 1000;
 
+/** RFC 6455 close reasons: UTF-8, max 123 bytes (no secrets — caller should pass ssh2 messages only). */
+function webSocketCloseReasonFromError(err: Error, fallback: string): string {
+  const raw = err.message.replace(/\s+/g, " ").trim();
+  if (raw.length === 0) return fallback;
+  const enc = new TextEncoder();
+  let end = raw.length;
+  while (end > 0 && enc.encode(raw.slice(0, end)).byteLength > 123) {
+    end -= 1;
+  }
+  const s = raw.slice(0, end).trim();
+  return s.length > 0 ? s : fallback;
+}
+
 export function createProfileSshWebSocketHandlers(options: {
   row: { host: string; ssh_port: number; ssh_user: string };
   sshPassword: string;
@@ -70,7 +83,7 @@ export function createProfileSshWebSocketHandlers(options: {
           }) => {
             if (err) {
               cleanup();
-              ws.close(1011, "shell error");
+              ws.close(1011, webSocketCloseReasonFromError(err, "shell error"));
               return;
             }
 
@@ -105,9 +118,9 @@ export function createProfileSshWebSocketHandlers(options: {
         );
       });
 
-      conn.on("error", (_err: Error) => {
+      conn.on("error", (err: Error) => {
         cleanup();
-        ws.close(1011, "ssh error");
+        ws.close(1011, webSocketCloseReasonFromError(err, "ssh error"));
       });
 
       conn.connect(

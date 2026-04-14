@@ -117,7 +117,7 @@ export async function executeProfileSetup(options: {
   if (!settings.vpnSshEnabled) {
     const phases = buildSetupPhases({
       panelHostname: row.panel_hostname,
-      acmeEmail: settings.acmeEmail || "ops@example.com",
+      acmeEmail: settings.acmeEmail,
       xuiLocalPort: XUI_LOCAL_PORT,
       adminUsername: PLACEHOLDER_ADMIN_USER,
       adminPassword: PLACEHOLDER_ADMIN_PASS,
@@ -131,10 +131,6 @@ export async function executeProfileSetup(options: {
         phases: phases.map((p) => ({ id: p.id, title: p.title, script: p.script })),
       },
     };
-  }
-
-  if (!settings.acmeEmail) {
-    throw Object.assign(new Error("acme_email_required"), { status: 400 as const });
   }
 
   const sshPassword = await decryptVpnPassword(

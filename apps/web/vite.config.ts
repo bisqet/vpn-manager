@@ -8,6 +8,8 @@ export default defineConfig({
     // `localhost` to IPv6 first → ERR_CONNECTION_REFUSED (-102). Listening on
     // all local addresses avoids that split on Windows/Chrome.
     host: true,
+    port: 5173,
+    strictPort: true,
     proxy: {
       // Use IPv4 literal: Node may resolve `localhost` to ::1; proxy then hits
       // ::1:3000 while Bun/API often listens on 127.0.0.1 only → EACCES / failures.

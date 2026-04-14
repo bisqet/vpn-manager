@@ -30,6 +30,7 @@ export const XUI_SYSTEMD = "x-ui";
 
 export type SetupPhaseContext = {
   panelHostname: string;
+  /** Empty or whitespace: Caddy gets no global `email { }` block (Let's Encrypt still works). */
   acmeEmail: string;
   xuiLocalPort: number;
   adminUsername: string;
@@ -60,6 +61,14 @@ export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
   const panelHttpsUrl = buildPanelHttpsUrl(panelHostname, webBasePath);
   if (panelHttpsUrl === null) throw new Error("buildSetupPhases: panelHttpsUrl unexpectedly empty");
   const caddySiteKey = caddySiteAddressKey(panelHostname);
+  const acmeForCaddy = acmeEmail.trim();
+  const caddyEmailGlobal =
+    acmeForCaddy === ""
+      ? ""
+      : `{
+\temail ${acmeForCaddy}
+}
+`;
 
   const preflight: SetupPhase = {
     id: "preflight",
@@ -146,10 +155,7 @@ apt-get install -y -qq caddy
     script: `set -euo pipefail
 mkdir -p /etc/caddy/conf.d
 cat > ${caddyConfPath} <<CADDY_EOF
-{
-\temail ${acmeEmail}
-}
-${caddySiteKey} {
+${caddyEmailGlobal}${caddySiteKey} {
 \tencode gzip
 \treverse_proxy 127.0.0.1:${xuiLocalPort}
 }

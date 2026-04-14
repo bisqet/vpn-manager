@@ -41,6 +41,22 @@ describe("buildSetupPhases", () => {
     expect(occurrences).toBe(1);
   });
 
+  test("configure_caddy omits global email block when acmeEmail is empty or whitespace", () => {
+    const phases = buildSetupPhases({
+      panelHostname: "panel.example.com",
+      acmeEmail: "  ",
+      xuiLocalPort: 2053,
+      adminUsername: "u1",
+      adminPassword: "p1",
+      webBasePath: "abc",
+    });
+    const configureCaddy = phases.find((p) => p.id === "configure_caddy");
+    expect(configureCaddy).toBeDefined();
+    const script = configureCaddy!.script;
+    expect(script).not.toContain("\temail ");
+    expect(script).toContain("panel.example.com {");
+  });
+
   test("phase ids are stable", () => {
     const phases = buildSetupPhases({
       panelHostname: "p.example.net",

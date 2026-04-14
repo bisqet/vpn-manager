@@ -29,3 +29,13 @@ VPN Manager is a monorepo with two apps — a Hono API server (`apps/server`, po
 - **Vite proxies `/api` to `:3000`**: Start the API server before or alongside the Vite dev server. The web app at `:5173` proxies all `/api/*` requests to `localhost:3000`.
 - **No ESLint configured**: The project does not include ESLint. TypeScript checking via `bunx tsc -b` in `apps/web` is the primary lint-like check.
 - **Bun may not be on PATH by default**: If `bun` is not found, source it with `export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH"`.
+
+## Learned User Preferences
+
+- Prefers an in-app **modal overlay** (large panel) over the browser **Fullscreen API** when expanding embedded diagrams such as the Chains **traffic diagram**.
+- When executing multi-task implementation plans, may choose **subagent-driven** execution (separate subagents per task with review between tasks) instead of doing every step in one chat.
+- For diagram-style views in the web app, prefers **pointer drag to pan**, **mouse wheel zoom without a modifier key**, and a visible **Reset view** control.
+
+## Learned Workspace Facts
+
+- From the repo root, **`bun run dev`** starts both workspaces’ dev servers via `bun run --filter "./apps/*" dev` in the root **`package.json`**.

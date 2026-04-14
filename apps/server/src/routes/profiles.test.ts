@@ -405,6 +405,41 @@ describe("profilesRoutes", () => {
     expect(row?.operational_status).toBe("pending");
   });
 
+  test("POST /api/profiles/:id/setup live path succeeds with fake ssh when ACME email empty", async () => {
+    putTestAppSettings(db, {
+      acmeEmail: "",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "NoAcme",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.noacme.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+    const body = await setupRes.json();
+    expect(body.setup.mode).toBe("live");
+    expect(body.profile.operationalStatus).toBe("working");
+  });
+
   test("POST /api/profiles/:id/setup live path succeeds with fake ssh", async () => {
     putTestAppSettings(db, {
       acmeEmail: "ops@example.com",

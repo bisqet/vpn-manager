@@ -49,7 +49,7 @@ describe("settingsRoutes", () => {
     expect(body.vpnSshEnabled).toBe(false);
   });
 
-  test("PATCH rejects live SSH without email", async () => {
+  test("PATCH allows live SSH with empty ACME email", async () => {
     putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: false, sshKnownHostsFile: null });
     const app = createApp(db, baseEnv);
     const res = await app.request("/api/settings", {
@@ -60,6 +60,9 @@ describe("settingsRoutes", () => {
       },
       body: JSON.stringify({ vpnSshEnabled: true }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { acmeEmail: string; vpnSshEnabled: boolean };
+    expect(body.vpnSshEnabled).toBe(true);
+    expect(body.acmeEmail).toBe("");
   });
 });

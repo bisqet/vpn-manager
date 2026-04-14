@@ -24,9 +24,11 @@ test("getAppSettings bootstraps from env when row missing", () => {
   delete process.env.SSH_KNOWN_HOSTS_FILE;
 });
 
-test("patchAppSettings rejects live SSH without ACME email", () => {
+test("patchAppSettings allows live SSH with empty ACME email", () => {
   putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: false, sshKnownHostsFile: null });
-  expect(() => patchAppSettings(db, { vpnSshEnabled: true })).toThrow();
+  const after = patchAppSettings(db, { vpnSshEnabled: true });
+  expect(after.vpnSshEnabled).toBe(true);
+  expect(after.acmeEmail).toBe("");
 });
 
 test("patchAppSettings happy path updates a field and updatedAt changes", async () => {

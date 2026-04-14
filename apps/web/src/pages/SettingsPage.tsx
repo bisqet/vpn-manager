@@ -90,7 +90,7 @@ export default function SettingsPage() {
 
       <form onSubmit={handleSubmit} style={cardStyle}>
         <label style={labelStyle}>
-          {"ACME contact email (Let's Encrypt / Caddy)"}
+          {"ACME contact email (optional; Let's Encrypt / Caddy)"}
           <input
             type="email"
             value={acmeEmail}

@@ -85,11 +85,6 @@ export function patchAppSettings(db: Database, patch: AppSettingsPatch): AppSett
           : patch.sshKnownHostsFile.trim()
         : current.sshKnownHostsFile,
   };
-  if (next.vpnSshEnabled && next.acmeEmail === "") {
-    const err = new Error("acme_email_required_when_ssh_enabled");
-    (err as Error & { status?: number }).status = 400;
-    throw err;
-  }
   const now = new Date().toISOString();
   db.run(
     `UPDATE app_settings SET acme_email = ?, vpn_ssh_enabled = ?, ssh_known_hosts_file = ?, updated_at = ? WHERE id = 1`,
