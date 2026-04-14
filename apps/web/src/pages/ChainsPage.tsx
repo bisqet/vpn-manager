@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
 import { ChainTrafficDiagram } from "../components/ChainTrafficDiagram";
 import type { ChainHopInput, RoutingProfileInput } from "../chainTrafficGraph";
+import { chainRailStyle, chainsPageRootStackStyle } from "../chainsPageLayout";
 
 const chainsQueryKey = ["chains"] as const;
 const profilesQueryKey = ["profiles"] as const;
@@ -420,7 +421,7 @@ export default function ChainsPage() {
       : "Save changes";
 
   return (
-    <div style={pageGridStyle}>
+    <div style={chainsPageRootStackStyle}>
       <section style={cardStyle}>
         <div style={headerRowStyle}>
           <div>
@@ -448,52 +449,56 @@ export default function ChainsPage() {
         ) : chains.length === 0 ? (
           <div style={emptyStateStyle}>No chains yet. Create one to get started.</div>
         ) : (
-          <div style={listStyle}>
-            {chains.map((chain) => {
-              const isSelected =
-                editorState.mode === "edit" && editorState.chainId === chain.id;
-              const isDeletingThisChain =
-                isDeleting && deleteMutation.variables === chain.id;
+          <div style={{ marginTop: "20px" }}>
+            <div style={chainRailStyle}>
+              {chains.map((chain) => {
+                const isSelected =
+                  editorState.mode === "edit" && editorState.chainId === chain.id;
+                const isDeletingThisChain =
+                  isDeleting && deleteMutation.variables === chain.id;
 
-              return (
-                <article
-                  key={chain.id}
-                  style={{
-                    ...chainCardStyle,
-                    borderColor: isSelected ? "#111827" : "#e5e7eb",
-                    background: isSelected ? "#f9fafb" : "#ffffff",
-                  }}
-                >
-                  <div style={chainCardContentStyle}>
-                    <div>
-                      <h3 style={chainNameStyle}>{chain.name}</h3>
-                      <div style={chainMetaStyle}>
-                        {chain.vpnProfileIds.length}{" "}
-                        {chain.vpnProfileIds.length === 1 ? "hop" : "hops"}
+                return (
+                  <article
+                    key={chain.id}
+                    style={{
+                      ...chainCardStyle,
+                      borderColor: isSelected ? "#111827" : "#e5e7eb",
+                      background: isSelected ? "#f9fafb" : "#ffffff",
+                      minWidth: "240px",
+                      flex: "0 0 auto",
+                    }}
+                  >
+                    <div style={chainCardContentStyle}>
+                      <div>
+                        <h3 style={chainNameStyle}>{chain.name}</h3>
+                        <div style={chainMetaStyle}>
+                          {chain.vpnProfileIds.length}{" "}
+                          {chain.vpnProfileIds.length === 1 ? "hop" : "hops"}
+                        </div>
+                      </div>
+                      <div style={actionRowStyle}>
+                        <button
+                          disabled={isSaving || isDeletingThisChain}
+                          onClick={() => loadChainIntoEditor(chain)}
+                          style={secondaryButtonStyle}
+                          type="button"
+                        >
+                          {isSelected ? "Editing" : "Edit"}
+                        </button>
+                        <button
+                          disabled={isDeletingThisChain}
+                          onClick={() => void handleDelete(chain)}
+                          style={dangerButtonStyle}
+                          type="button"
+                        >
+                          {isDeletingThisChain ? "Deleting..." : "Delete"}
+                        </button>
                       </div>
                     </div>
-                    <div style={actionRowStyle}>
-                      <button
-                        disabled={isSaving || isDeletingThisChain}
-                        onClick={() => loadChainIntoEditor(chain)}
-                        style={secondaryButtonStyle}
-                        type="button"
-                      >
-                        {isSelected ? "Editing" : "Edit"}
-                      </button>
-                      <button
-                        disabled={isDeletingThisChain}
-                        onClick={() => void handleDelete(chain)}
-                        style={dangerButtonStyle}
-                        type="button"
-                      >
-                        {isDeletingThisChain ? "Deleting..." : "Delete"}
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
@@ -631,12 +636,14 @@ export default function ChainsPage() {
             </button>
           </div>
         </form>
+      </section>
 
-        <div ref={diagramContainerRef} style={diagramSectionStyle}>
-          <h3 style={sectionTitleStyle}>Traffic diagram</h3>
-          <p style={helperTextStyle}>
-            VPN hop order and per-hop routing. Edit routing rules on the Routing page.
-          </p>
+      <section style={cardStyle}>
+        <h3 style={sectionTitleStyle}>Traffic diagram</h3>
+        <p style={helperTextStyle}>
+          VPN hop order and per-hop routing. Edit routing rules on the Routing page.
+        </p>
+        <div ref={diagramContainerRef} style={diagramMeasureStyle}>
           {diagramWidth > 0 ? (
             <ChainTrafficDiagram
               draftLabels={draftDiagramLabels}
@@ -652,13 +659,6 @@ export default function ChainsPage() {
     </div>
   );
 }
-
-const pageGridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
-  gap: "24px",
-  alignItems: "start",
-};
 
 const cardStyle: CSSProperties = {
   padding: "24px",
@@ -678,10 +678,9 @@ const editorHeaderStyle: CSSProperties = {
   marginBottom: "24px",
 };
 
-const diagramSectionStyle: CSSProperties = {
-  marginTop: "28px",
-  paddingTop: "20px",
-  borderTop: "1px solid #e5e7eb",
+const diagramMeasureStyle: CSSProperties = {
+  marginTop: "12px",
+  width: "100%",
 };
 
 const sectionHeaderStyle: CSSProperties = {
@@ -715,12 +714,6 @@ const helperTextStyle: CSSProperties = {
   margin: 0,
   color: "#4b5563",
   lineHeight: 1.5,
-};
-
-const listStyle: CSSProperties = {
-  marginTop: "24px",
-  display: "grid",
-  gap: "12px",
 };
 
 const chainCardStyle: CSSProperties = {
