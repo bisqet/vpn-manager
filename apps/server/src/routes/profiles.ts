@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
+import { simulateSetupWork, verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
 
 type VpnProfileRow = {
   id: number;
@@ -11,6 +12,7 @@ type VpnProfileRow = {
   host: string;
   ssh_port: number;
   ssh_user: string;
+  operational_status: string;
   created_at: string;
   updated_at: string;
 };
@@ -29,6 +31,7 @@ function toProfileDto(row: VpnProfileRow) {
     host: row.host,
     sshPort: row.ssh_port,
     sshUser: row.ssh_user,
+    operationalStatus: row.operational_status as "pending" | "working",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -61,6 +64,7 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           host,
           ssh_port,
           ssh_user,
+          operational_status,
           ssh_password_ciphertext,
           ssh_password_nonce,
           created_at,
@@ -84,6 +88,7 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
           host,
           ssh_port,
           ssh_user,
+          operational_status,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -119,6 +124,28 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
 
     const created = getProfileById(db, Number(result.lastInsertRowid));
     return c.json(toProfileDto(created!), 201);
+  });
+
+  app.post("/:id/setup", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid profile id" }, 400);
+    }
+
+    const existing = getProfileById(db, id);
+    if (!existing) {
+      return c.json({ error: "Profile not found" }, 404);
+    }
+
+    await simulateSetupWork();
+    const status = await verifyProfileHealthPlaceholder();
+
+    db.query(
+      "UPDATE vpn_profiles SET operational_status = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(status, id);
+
+    const updated = getProfileById(db, id);
+    return c.json(toProfileDto(updated!));
   });
 
   app.patch("/:id", async (c) => {
@@ -175,6 +202,11 @@ export function profilesRoutes(db: Database, env: ProfilesEnv) {
       nonce,
       id,
     );
+
+    const nextStatus = await verifyProfileHealthPlaceholder();
+    db.query(
+      "UPDATE vpn_profiles SET operational_status = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(nextStatus, id);
 
     const updated = getProfileById(db, id);
     return c.json(toProfileDto(updated!));

@@ -12,6 +12,7 @@ type ProfileRow = {
   host: string;
   ssh_port: number;
   ssh_user: string;
+  operational_status: string;
   ssh_password_ciphertext: Uint8Array;
   ssh_password_nonce: Uint8Array;
   created_at: string;
@@ -74,6 +75,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      operationalStatus: "pending",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
@@ -81,10 +83,11 @@ describe("profilesRoutes", () => {
 
     const storedAfterCreate = db
       .query<ProfileRow, [number]>(
-        "SELECT id, label, host, ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
+        "SELECT id, label, host, ssh_port, ssh_user, operational_status, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
       )
       .get(1);
     expect(storedAfterCreate).toBeDefined();
+    expect(storedAfterCreate!.operational_status).toBe("pending");
     expect(await decryptVpnPassword(env.masterKey, storedAfterCreate!.ssh_password_ciphertext, storedAfterCreate!.ssh_password_nonce)).toBe(
       "hunter2",
     );
@@ -119,13 +122,14 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
 
     const storedAfterLabelPatch = db
       .query<ProfileRow, [number]>(
-        "SELECT id, label, host, ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
+        "SELECT id, label, host, ssh_port, ssh_user, operational_status, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
       )
       .get(1);
     expect(await decryptVpnPassword(env.masterKey, storedAfterLabelPatch!.ssh_password_ciphertext, storedAfterLabelPatch!.ssh_password_nonce)).toBe(
@@ -151,6 +155,7 @@ describe("profilesRoutes", () => {
       host: "vpn.example.com",
       sshPort: 22,
       sshUser: "root",
+      operationalStatus: "working",
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     });
@@ -158,7 +163,7 @@ describe("profilesRoutes", () => {
 
     const storedAfterPasswordPatch = db
       .query<ProfileRow, [number]>(
-        "SELECT id, label, host, ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
+        "SELECT id, label, host, ssh_port, ssh_user, operational_status, ssh_password_ciphertext, ssh_password_nonce, created_at, updated_at FROM vpn_profiles WHERE id = ?",
       )
       .get(1);
     expect(await decryptVpnPassword(env.masterKey, storedAfterPasswordPatch!.ssh_password_ciphertext, storedAfterPasswordPatch!.ssh_password_nonce)).toBe(
@@ -210,5 +215,70 @@ describe("profilesRoutes", () => {
     expect(await deleteRes.json()).toEqual({
       error: "Profile is in use by one or more chain hops",
     });
+  });
+
+  test("POST /api/profiles/:id/setup marks profile working", async () => {
+    const app = createApp(db, env);
+
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Edge",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json();
+    expect(created.operationalStatus).toBe("pending");
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+    const afterSetup = await setupRes.json();
+    expect(afterSetup.operationalStatus).toBe("working");
+
+    const row = db.query<{ operational_status: string }, []>(
+      "SELECT operational_status FROM vpn_profiles WHERE id = 1",
+    ).get();
+    expect(row?.operational_status).toBe("working");
+  });
+
+  test("PATCH runs placeholder verify and sets operationalStatus working", async () => {
+    const app = createApp(db, env);
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "X",
+        host: "1.2.3.4",
+        sshPort: 22,
+        sshUser: "u",
+        sshPassword: "p",
+      }),
+    });
+
+    const patchRes = await app.request("/api/profiles/1", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({ label: "Y" }),
+    });
+    expect(patchRes.status).toBe(200);
+    const body = await patchRes.json();
+    expect(body.operationalStatus).toBe("working");
   });
 });
