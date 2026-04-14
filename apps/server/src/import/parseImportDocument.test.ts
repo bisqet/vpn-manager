@@ -73,6 +73,22 @@ describe("parseImportDocument", () => {
     }
   });
 
+  test("invalid v2 does not fall through to bare VPN parsing", () => {
+    const r = parseImportDocument(
+      JSON.stringify({
+        schemaVersion: 2,
+        exportedAt: "",
+        chainId: 1,
+        chain: [],
+        routingByHop: [],
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors.join(" ").toLowerCase()).toMatch(/exportedat|string/);
+    }
+  });
+
   test("bare VPN valid", () => {
     const r = parseImportDocument(
       JSON.stringify({

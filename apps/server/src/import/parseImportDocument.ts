@@ -176,6 +176,7 @@ export function parseImportDocument(
         normalized: { schemaVersion: 3, chains: [parsed.data], vpns: [] },
       };
     }
+    return { ok: false, errors: formatZodErrors(parsed.error) };
   }
 
   if ("routingByHop" in root) {
