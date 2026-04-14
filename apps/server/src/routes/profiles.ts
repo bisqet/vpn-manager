@@ -6,6 +6,7 @@ import { getCookie } from "hono/cookie";
 import type { UpgradeWebSocket } from "hono/ws";
 import { SESSION_COOKIE } from "../auth/cookie";
 import { getSessionUserId } from "../auth/session";
+import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
@@ -387,6 +388,69 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
 
       throw error;
     }
+  });
+
+  app.get("/:id/panel-login", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid VPN profile id" }, 400);
+    }
+
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
+    if (userId === null) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const row =
+      db
+        .query<
+          {
+            operational_status: string;
+            panel_hostname: string;
+            xui_web_base_path: string | null;
+            xui_secrets_ciphertext: Uint8Array | null;
+            xui_secrets_nonce: Uint8Array | null;
+          },
+          [number]
+        >(
+          `SELECT operational_status, panel_hostname, xui_web_base_path,
+                xui_secrets_ciphertext, xui_secrets_nonce
+         FROM vpn_profiles WHERE id = ?`,
+        )
+        .get(id) ?? null;
+
+    if (!row) {
+      return c.json({ error: "Profile not found" }, 404);
+    }
+
+    if (row.operational_status !== "working") {
+      return c.json({ error: "Panel login is only available after successful setup" }, 409);
+    }
+    if (!row.xui_secrets_ciphertext || !row.xui_secrets_nonce || !row.xui_web_base_path) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    let secrets;
+    try {
+      secrets = await decryptXuiSecretsJson(env.masterKey, row.xui_secrets_ciphertext, row.xui_secrets_nonce);
+    } catch {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+    if (secrets.v !== 1) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path);
+    if (!panelUrl) {
+      return c.json({ error: "Panel credentials are not available for this profile" }, 409);
+    }
+
+    return c.json({
+      panelUrl,
+      adminUsername: secrets.adminUsername,
+      adminPassword: secrets.adminPassword,
+    });
   });
 
   app.get(

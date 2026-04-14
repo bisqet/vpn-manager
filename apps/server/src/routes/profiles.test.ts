@@ -478,6 +478,102 @@ describe("profilesRoutes", () => {
     expect(listed[0]!.panelUrl).toBeNull();
   });
 
+  test("GET /api/profiles/:id/panel-login returns 401 without session", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/1/panel-login");
+    expect(res.status).toBe(401);
+  });
+
+  test("GET /api/profiles/:id/panel-login returns 200 with credentials after live setup", async () => {
+    const liveEnv: Env = {
+      ...env,
+      vpnSshEnabled: true,
+      acmeEmail: "ops@example.com",
+    };
+    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
+    const app = createApp(db, liveEnv, { profiles: { sshExec: fakeSsh } });
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Live",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "panel.live.example.com",
+      }),
+    });
+
+    const setupRes = await app.request("/api/profiles/1/setup", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(setupRes.status).toBe(200);
+
+    const dbRow = db
+      .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
+        "SELECT panel_hostname, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      )
+      .get();
+    expect(dbRow).toBeDefined();
+
+    const loginRes = await app.request("/api/profiles/1/panel-login", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(loginRes.status).toBe(200);
+    const body = (await loginRes.json()) as {
+      adminUsername: string;
+      adminPassword: string;
+      panelUrl: string;
+    };
+    expect(body.adminUsername.length).toBeGreaterThan(0);
+    expect(body.adminPassword.length).toBeGreaterThan(0);
+    expect(body.panelUrl.length).toBeGreaterThan(0);
+    expect(body.panelUrl).toBe(buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path));
+  });
+
+  test("GET /api/profiles/:id/panel-login returns 404 when profile missing", async () => {
+    const app = createApp(db, env);
+    const res = await app.request("/api/profiles/99/panel-login", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Profile not found" });
+  });
+
+  test("GET /api/profiles/:id/panel-login returns 409 when profile is pending", async () => {
+    const app = createApp(db, env);
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Pending",
+        host: "10.0.0.1",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "pw",
+        panelHostname: "panel.pending.example.com",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const loginRes = await app.request("/api/profiles/1/panel-login", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(loginRes.status).toBe(409);
+    expect(await loginRes.json()).toEqual({
+      error: "Panel login is only available after successful setup",
+    });
+  });
+
   test("GET /api/profiles returns panelUrl when session and working", async () => {
     const liveEnv: Env = {
       ...env,
