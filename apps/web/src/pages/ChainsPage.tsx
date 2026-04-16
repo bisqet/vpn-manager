@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, FormEvent } from "react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../api/client";
 import {
   ChainTrafficDiagram,
@@ -65,6 +65,11 @@ type ChainPayload = {
   vpnProfileIds: number[];
 };
 
+type ClientAccessPayload = {
+  vlessShareLink: string;
+  subscriptionUrl: string;
+};
+
 type HopRow = {
   key: number;
   vpnProfileId: string;
@@ -103,6 +108,12 @@ function updateChain(id: number, payload: ChainPayload) {
 function deleteChain(id: number) {
   return apiFetch<{ ok: true }>(`/api/chains/${id}`, {
     method: "DELETE",
+  });
+}
+
+function postGenerateProfile(chainId: number) {
+  return apiFetch<ClientAccessPayload>(`/api/chains/${chainId}/generate-profile`, {
+    method: "POST",
   });
 }
 
@@ -167,6 +178,12 @@ export default function ChainsPage() {
   const expandDiagramButtonRef = useRef<HTMLButtonElement>(null);
   const modalDiagramRef = useRef<ChainTrafficDiagramHandle | null>(null);
   const diagramModalPrevOpenRef = useRef(false);
+  const [clientAccessModalOpen, setClientAccessModalOpen] = useState(false);
+  const [clientAccessPayload, setClientAccessPayload] = useState<ClientAccessPayload | null>(
+    null,
+  );
+  const clientAccessModalCloseRef = useRef<HTMLButtonElement>(null);
+  const [clientAccessCopyError, setClientAccessCopyError] = useState<string | null>(null);
 
   function chainHopRowsFromChain(chain: Chain): HopRow[] {
     if (chain.hops.length > 0) {
@@ -256,8 +273,27 @@ export default function ChainsPage() {
     },
   });
 
+  const generateProfileMutation = useMutation({
+    mutationFn: postGenerateProfile,
+    onSuccess: (data) => {
+      setClientAccessPayload(data);
+      setClientAccessModalOpen(true);
+      setClientAccessCopyError(null);
+    },
+  });
+
+  const closeClientAccessModal = useCallback(() => {
+    setClientAccessModalOpen(false);
+    setClientAccessPayload(null);
+    setClientAccessCopyError(null);
+  }, []);
+
   const mutationError =
-    createMutation.error ?? updateMutation.error ?? deleteMutation.error ?? null;
+    createMutation.error ??
+    updateMutation.error ??
+    deleteMutation.error ??
+    generateProfileMutation.error ??
+    null;
   const isSaving = createMutation.isPending || updateMutation.isPending;
   const isDeleting = deleteMutation.isPending;
   const isCreateMode = editorState.mode === "create";
@@ -394,6 +430,25 @@ export default function ChainsPage() {
     diagramModalPrevOpenRef.current = diagramModalOpen;
   }, [diagramModalOpen]);
 
+  useEffect(() => {
+    if (!clientAccessModalOpen) {
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeClientAccessModal();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clientAccessModalOpen, closeClientAccessModal]);
+
+  useEffect(() => {
+    if (clientAccessModalOpen) {
+      clientAccessModalCloseRef.current?.focus();
+    }
+  }, [clientAccessModalOpen]);
+
   function makeHopRow() {
     return {
       key: nextHopKeyRef.current++,
@@ -477,6 +532,23 @@ export default function ChainsPage() {
     }
   }
 
+  async function copyClientAccessField(label: string, text: string) {
+    setClientAccessCopyError(null);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        const message = "Clipboard is not available in this browser.";
+        setClientAccessCopyError(message);
+        window.alert(message);
+        return;
+      }
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const message = `Could not copy ${label}.`;
+      setClientAccessCopyError(message);
+      window.alert(message);
+    }
+  }
+
   const saveLabel = isCreateMode
     ? isSaving
       ? "Creating..."
@@ -484,6 +556,27 @@ export default function ChainsPage() {
     : isSaving
       ? "Saving..."
       : "Save changes";
+
+  function getGenerateProfileDisabledReason(chain: Chain): string | null {
+    if (profilesQuery.isPending) {
+      return "Loading VPN profiles…";
+    }
+    if (profilesQuery.isError) {
+      return "VPN profiles could not be loaded.";
+    }
+    if (chain.hops.length !== 1) {
+      return "Only single-hop chains can generate a client profile.";
+    }
+    const entryHop = chain.hops[0];
+    const profile = profilesQuery.data?.find((p) => p.id === entryHop.vpnProfileId);
+    if (!profile) {
+      return "Hop VPN profile was not found. Refresh or fix the chain.";
+    }
+    if (profile.operationalStatus !== "working") {
+      return "The entry VPN profile must have operational status Working.";
+    }
+    return null;
+  }
 
   return (
     <div style={chainsPageRootStackStyle}>
@@ -521,6 +614,16 @@ export default function ChainsPage() {
                   editorState.mode === "edit" && editorState.chainId === chain.id;
                 const isDeletingThisChain =
                   isDeleting && deleteMutation.variables === chain.id;
+                const generateDisabledReason = getGenerateProfileDisabledReason(chain);
+                const canGenerateProfile = generateDisabledReason === null;
+                const isGeneratingThisChain =
+                  generateProfileMutation.isPending &&
+                  generateProfileMutation.variables === chain.id;
+                const generateProfileErrorThisChain =
+                  generateProfileMutation.isError &&
+                  generateProfileMutation.variables === chain.id
+                    ? getErrorMessage(generateProfileMutation.error)
+                    : null;
 
                 return (
                   <article
@@ -541,23 +644,64 @@ export default function ChainsPage() {
                           {chain.vpnProfileIds.length === 1 ? "hop" : "hops"}
                         </div>
                       </div>
-                      <div style={actionRowStyle}>
-                        <button
-                          disabled={isSaving || isDeletingThisChain}
-                          onClick={() => loadChainIntoEditor(chain)}
-                          style={secondaryButtonStyle}
-                          type="button"
-                        >
-                          {isSelected ? "Editing" : "Edit"}
-                        </button>
-                        <button
-                          disabled={isDeletingThisChain}
-                          onClick={() => void handleDelete(chain)}
-                          style={dangerButtonStyle}
-                          type="button"
-                        >
-                          {isDeletingThisChain ? "Deleting..." : "Delete"}
-                        </button>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "8px",
+                          alignItems: "flex-end",
+                          minWidth: 0,
+                        }}
+                      >
+                        <div style={actionRowStyle}>
+                          <button
+                            disabled={isSaving || isDeletingThisChain}
+                            onClick={() => loadChainIntoEditor(chain)}
+                            style={secondaryButtonStyle}
+                            type="button"
+                          >
+                            {isSelected ? "Editing" : "Edit"}
+                          </button>
+                          <button
+                            disabled={
+                              !canGenerateProfile ||
+                              isSaving ||
+                              isDeletingThisChain ||
+                              isGeneratingThisChain
+                            }
+                            onClick={() => generateProfileMutation.mutate(chain.id)}
+                            title={
+                              canGenerateProfile
+                                ? "Generate VLESS share link and subscription URL"
+                                : (generateDisabledReason ?? undefined)
+                            }
+                            style={secondaryButtonStyle}
+                            type="button"
+                          >
+                            {isGeneratingThisChain ? "Generating..." : "Generate profile"}
+                          </button>
+                          <button
+                            disabled={isDeletingThisChain}
+                            onClick={() => void handleDelete(chain)}
+                            style={dangerButtonStyle}
+                            type="button"
+                          >
+                            {isDeletingThisChain ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                        {generateProfileErrorThisChain ? (
+                          <div
+                            style={{
+                              ...errorStyle,
+                              marginTop: 0,
+                              width: "100%",
+                              maxWidth: "280px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {generateProfileErrorThisChain}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </article>
@@ -828,6 +972,115 @@ export default function ChainsPage() {
           </div>
         </div>
       ) : null}
+
+      {clientAccessModalOpen && clientAccessPayload ? (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="client-access-dialog-title"
+            style={{
+              width: "min(96vw, 640px)",
+              maxHeight: "90vh",
+              overflow: "auto",
+              borderRadius: "16px",
+              background: "#ffffff",
+              boxShadow: "0 24px 64px rgba(15, 23, 42, 0.2)",
+              padding: "20px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h3
+                id="client-access-dialog-title"
+                style={{ ...sectionTitleStyle, margin: 0 }}
+              >
+                Client access
+              </h3>
+              <button
+                ref={clientAccessModalCloseRef}
+                type="button"
+                aria-label="Close client access"
+                onClick={closeClientAccessModal}
+                style={ghostButtonStyle}
+              >
+                Close
+              </button>
+            </div>
+            {clientAccessCopyError ? (
+              <div style={{ ...errorStyle, marginTop: 0, marginBottom: "12px" }}>
+                {clientAccessCopyError}
+              </div>
+            ) : null}
+            <div style={{ display: "grid", gap: "16px" }}>
+              <label style={labelStyle}>
+                VLESS share link
+                <div style={readonlyFieldRowStyle}>
+                  <textarea
+                    readOnly
+                    rows={3}
+                    style={readonlyTextareaStyle}
+                    value={clientAccessPayload.vlessShareLink}
+                  />
+                  <button
+                    onClick={() =>
+                      void copyClientAccessField(
+                        "VLESS share link",
+                        clientAccessPayload.vlessShareLink,
+                      )
+                    }
+                    style={secondaryButtonStyle}
+                    type="button"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </label>
+              <label style={labelStyle}>
+                Subscription URL
+                <div style={readonlyFieldRowStyle}>
+                  <textarea
+                    readOnly
+                    rows={3}
+                    style={readonlyTextareaStyle}
+                    value={clientAccessPayload.subscriptionUrl}
+                  />
+                  <button
+                    onClick={() =>
+                      void copyClientAccessField(
+                        "subscription URL",
+                        clientAccessPayload.subscriptionUrl,
+                      )
+                    }
+                    style={secondaryButtonStyle}
+                    type="button"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1026,4 +1279,19 @@ const errorStyle: CSSProperties = {
   background: "#fef2f2",
   color: "#b91c1c",
   border: "1px solid #fecaca",
+};
+
+const readonlyFieldRowStyle: CSSProperties = {
+  display: "flex",
+  gap: "10px",
+  alignItems: "flex-start",
+};
+
+const readonlyTextareaStyle: CSSProperties = {
+  ...inputStyle,
+  flex: 1,
+  minWidth: 0,
+  resize: "vertical",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  lineHeight: 1.4,
 };
