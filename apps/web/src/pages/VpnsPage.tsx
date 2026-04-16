@@ -535,6 +535,8 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
   const [disconnected, setDisconnected] = useState(false);
   const [disconnectHint, setDisconnectHint] = useState<string | null>(null);
   const [runFinished, setRunFinished] = useState(false);
+  /** From server JSON `{ type: "setupComplete", outcome }` — null until message received. */
+  const [runOutcome, setRunOutcome] = useState<"success" | "failed" | null>(null);
   const runFinishedRef = useRef(false);
   const socketRef = useRef<WebSocket | null>(null);
   const onRunFinishedRef = useRef(onRunFinished);
@@ -580,6 +582,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     setDisconnected(false);
     setDisconnectHint(null);
     setRunFinished(false);
+    setRunOutcome(null);
     runFinishedRef.current = false;
 
     let ws: WebSocket | undefined;
@@ -627,6 +630,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
         if (msg.type === "setupComplete") {
           runFinishedRef.current = true;
           setRunFinished(true);
+          setRunOutcome(msg.outcome === "failed" ? "failed" : "success");
           onRunFinishedRef.current();
           void queryClient.invalidateQueries({ queryKey: profilesQueryKey });
           return;
@@ -724,7 +728,30 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
           <div ref={terminalContainerRef} style={sshXtermContainerStyle} />
           {disconnected ? (
             <div style={sshDisconnectedOverlayStyle}>
-              <span>{runFinished ? "Setup complete" : "Disconnected"}</span>
+              <span>
+                {runFinished
+                  ? runOutcome === "failed"
+                    ? "Setup finished with errors"
+                    : "Setup complete"
+                  : "Disconnected"}
+              </span>
+              {runFinished && runOutcome === "success" ? (
+                <p
+                  style={{ margin: "8px 0 0", maxWidth: "440px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
+                >
+                  Panel URL and copy buttons for admin user/password are on the VPN list after you close this — you
+                  must be signed in to see them. The same credentials also appear in the terminal
+                  output above (install banner).
+                </p>
+              ) : null}
+              {runFinished && runOutcome === "failed" ? (
+                <p
+                  style={{ margin: "8px 0 0", maxWidth: "440px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
+                >
+                  Scroll the terminal above for details. If the profile stayed Pending, open Edit on that profile to
+                  read the last setup error.
+                </p>
+              ) : null}
               {disconnectHint ? (
                 <p
                   style={{ margin: "8px 0 0", maxWidth: "420px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
@@ -1009,7 +1036,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
     }
     if (
       !window.confirm(
-        "Remove 3x-ui and the Caddy HTTPS admin panel from this server until you run Setup again? Firewall (UFW) rules on the host are not changed. This is meant for a clean reinstall of the panel stack.",
+        "Run upstream `x-ui uninstall` on this server (removes the 3x-ui panel and its data)? Other host changes from Setup (for example firewall rules) are not removed by this action.",
       )
     ) {
       return;
