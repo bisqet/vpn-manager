@@ -535,8 +535,6 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
   const [disconnected, setDisconnected] = useState(false);
   const [disconnectHint, setDisconnectHint] = useState<string | null>(null);
   const [runFinished, setRunFinished] = useState(false);
-  /** From server JSON `{ type: "setupComplete", outcome }` — null until message received. */
-  const [runOutcome, setRunOutcome] = useState<"success" | "failed" | null>(null);
   const runFinishedRef = useRef(false);
   const socketRef = useRef<WebSocket | null>(null);
   const onRunFinishedRef = useRef(onRunFinished);
@@ -582,7 +580,6 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     setDisconnected(false);
     setDisconnectHint(null);
     setRunFinished(false);
-    setRunOutcome(null);
     runFinishedRef.current = false;
 
     let ws: WebSocket | undefined;
@@ -630,7 +627,6 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
         if (msg.type === "setupComplete") {
           runFinishedRef.current = true;
           setRunFinished(true);
-          setRunOutcome(msg.outcome === "failed" ? "failed" : "success");
           onRunFinishedRef.current();
           void queryClient.invalidateQueries({ queryKey: profilesQueryKey });
           return;
@@ -728,30 +724,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
           <div ref={terminalContainerRef} style={sshXtermContainerStyle} />
           {disconnected ? (
             <div style={sshDisconnectedOverlayStyle}>
-              <span>
-                {runFinished
-                  ? runOutcome === "failed"
-                    ? "Setup finished with errors"
-                    : "Setup complete"
-                  : "Disconnected"}
-              </span>
-              {runFinished && runOutcome === "success" ? (
-                <p
-                  style={{ margin: "8px 0 0", maxWidth: "440px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
-                >
-                  Panel URL and copy buttons for admin user/password are on the VPN list after you close this — you
-                  must be signed in to see them. The same credentials also appear in the terminal
-                  output above (install banner).
-                </p>
-              ) : null}
-              {runFinished && runOutcome === "failed" ? (
-                <p
-                  style={{ margin: "8px 0 0", maxWidth: "440px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
-                >
-                  Scroll the terminal above for details. If the profile stayed Pending, open Edit on that profile to
-                  read the last setup error.
-                </p>
-              ) : null}
+              <span>{runFinished ? "Setup complete" : "Disconnected"}</span>
               {disconnectHint ? (
                 <p
                   style={{ margin: "8px 0 0", maxWidth: "420px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
@@ -1127,7 +1100,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
               <thead>
                 <tr>
                   <th style={tableHeadCellStyle}>Label</th>
-                  <th style={tableHeadCellStyle}>SSH port</th>
+                  <th style={tableHeadCellStyle}>IP or Host</th>
                   <th style={tableHeadCellStyle}>Panel</th>
                   <th style={tableHeadCellStyle} title="Copy 3x-ui panel admin username">
                     Panel user
@@ -1152,7 +1125,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                   return (
                     <tr key={profile.id}>
                       <td style={tableBodyCellStyle}>{profile.label}</td>
-                      <td style={tableBodyCellStyle}>{profile.sshPort}</td>
+                      <td style={tableBodyCellStyle}>{profile.host}</td>
                       <td style={tableBodyCellStyle}>
                         {profile.panelUrl ? (
                           <a
