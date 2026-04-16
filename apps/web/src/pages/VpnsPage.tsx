@@ -600,26 +600,40 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     term.loadAddon(fitAddon);
     term.open(container);
     fitAddon.fit();
+    requestAnimationFrame(() => {
+      fitAddon.fit();
+    });
 
-    // Viewer-only: keystrokes are not forwarded to the server.
-    // Resize events are the only client→server messages.
+    socket.onopen = () => {
+      term.write("\x1b[90mSetup session open — server runs install automation (keystrokes may be ignored until done).\x1b[0m\r\n");
+    };
+
+    const encoder = new TextEncoder();
+    term.onData((data) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(encoder.encode(data));
+      }
+    });
 
     socket.onmessage = (event) => {
       if (typeof event.data === "string") {
+        let msg: { type?: string; outcome?: string };
         try {
-          const msg = JSON.parse(event.data) as { type?: string; outcome?: string };
-          if (msg.type === "setupComplete") {
-            runFinishedRef.current = true;
-            setRunFinished(true);
-            onRunFinishedRef.current();
-            void queryClient.invalidateQueries({ queryKey: profilesQueryKey });
-          }
+          msg = JSON.parse(event.data) as { type?: string; outcome?: string };
         } catch {
-          // not a JSON control message — ignore
+          term.write(event.data);
+          return;
         }
-      } else {
-        term.write(new Uint8Array(event.data as ArrayBuffer));
+        if (msg.type === "setupComplete") {
+          runFinishedRef.current = true;
+          setRunFinished(true);
+          onRunFinishedRef.current();
+          void queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+          return;
+        }
+        return;
       }
+      term.write(new Uint8Array(event.data as ArrayBuffer));
     };
 
     socket.onclose = (ev) => {

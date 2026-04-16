@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createProfileSetupTerminalWebSocketHandlers } from "./profileSetupTerminalBridge";
 import type { WSContext } from "hono/ws";
 import { beginSetupRun, endSetupRun } from "./setupRunRegistry";
+import type { InstallShSetupResult } from "./runInstallShSetupSession";
 
 // ---------------------------------------------------------------------------
 // Fake ssh2 stream
@@ -31,6 +32,14 @@ class FakeStream {
     const arr = this.listeners.get(event) ?? [];
     arr.push(cb);
     this.listeners.set(event, arr);
+  }
+
+  off(event: string, cb: DataListener) {
+    const arr = this.listeners.get(event) ?? [];
+    this.listeners.set(
+      event,
+      arr.filter((listener) => listener !== cb),
+    );
   }
 
   emit(event: string, data: unknown) {
@@ -68,6 +77,9 @@ class FakeClient {
   stream: FakeStream | null = null;
   connectConfig: unknown = null;
   ended = false;
+  shellCalls = 0;
+  execCalls = 0;
+  shellOptions: { term: string; cols: number; rows: number } | null = null;
 
   constructor() {
     FakeClient.lastInstance = this;
@@ -91,9 +103,21 @@ class FakeClient {
   }
 
   shell(
-    _options: { term: string; cols: number; rows: number },
+    options: { term: string; cols: number; rows: number },
     cb: (err: Error | undefined, stream: FakeStream) => void,
   ) {
+    this.shellCalls += 1;
+    this.shellOptions = options;
+    this.stream = new FakeStream();
+    cb(undefined, this.stream);
+  }
+
+  exec(
+    _command: string,
+    _options: { pty?: { term: string; cols: number; rows: number } },
+    cb: (err: Error | undefined, stream: FakeStream) => void,
+  ) {
+    this.execCalls += 1;
     this.stream = new FakeStream();
     cb(undefined, this.stream);
   }
@@ -160,12 +184,12 @@ const FAKE_APP_SETTINGS = {
 };
 
 /**
- * Never-resolving mock for runLiveSetupPhases.
+ * Never-resolving mock for runInstallShSetupSession.
  * Ensures driver doesn't complete during synchronous tests, avoiding
  * registry races between test cases.
  */
-const hangingRunLiveSetupPhases = () =>
-  new Promise<{ outcome: "live-success" | "live-failed"; phases: [] }>(() => {});
+const hangingRunInstallShSetupSession = () =>
+  new Promise<InstallShSetupResult>(() => {});
 
 /**
  * Creates handlers with FakeClient injected, calls onOpen so the SSH
@@ -173,7 +197,8 @@ const hangingRunLiveSetupPhases = () =>
  */
 function openHandlers(
   ws: FakeWs,
-  runLiveSetupPhasesImpl = hangingRunLiveSetupPhases,
+  runInstallShSetupSessionImpl = hangingRunInstallShSetupSession,
+  afterInstall?: (result: InstallShSetupResult) => Promise<void>,
 ): {
   handlers: ReturnType<typeof createProfileSetupTerminalWebSocketHandlers>;
   client: FakeClient;
@@ -187,7 +212,8 @@ function openHandlers(
     sshPassword: "hunter2",
     getAppSettings: () => FAKE_APP_SETTINGS,
     ClientImpl: FakeClient as unknown as typeof import("ssh2").Client,
-    _runLiveSetupPhases: runLiveSetupPhasesImpl,
+    _runInstallShSetupSession: runInstallShSetupSessionImpl,
+    _afterInstall: afterInstall,
   });
   handlers.onOpen(new Event("open"), ws as unknown as WSContext);
   const client = FakeClient.lastInstance!;
@@ -219,6 +245,9 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     expect(ws.sent.length).toBe(1);
     expect(ws.sent[0]).toBeInstanceOf(Uint8Array);
     expect(Array.from(ws.sent[0] as Uint8Array)).toEqual([1, 2, 3, 4]);
+    expect(client.shellCalls).toBe(1);
+    expect(client.execCalls).toBe(0);
+    expect(client.shellOptions).toEqual({ term: "xterm-256color", cols: 80, rows: 24 });
   });
 
   test("binary data from stream stderr is forwarded to ws.send as Uint8Array", () => {
@@ -244,7 +273,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     expect(client.stream!.setWindowCalls[0]).toEqual([40, 120, 0, 0]);
   });
 
-  test("non-resize JSON text is NOT written to the stream", () => {
+  test("non-resize JSON text is NOT written to the stream while automation is running", () => {
     const ws = makeFakeWs();
     const { handlers, client } = openHandlers(ws);
 
@@ -256,7 +285,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     expect(client.stream!.writtenBuffers.length).toBe(0);
   });
 
-  test("raw (non-JSON) text is NOT written to the stream", () => {
+  test("raw (non-JSON) text is NOT written to the stream while automation is running", () => {
     const ws = makeFakeWs();
     const { handlers, client } = openHandlers(ws);
 
@@ -268,7 +297,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     expect(client.stream!.writtenBuffers.length).toBe(0);
   });
 
-  test("binary ArrayBuffer input is NOT written to the stream", () => {
+  test("binary ArrayBuffer input is NOT written to the stream while automation is running", () => {
     const ws = makeFakeWs();
     const { handlers, client } = openHandlers(ws);
 
@@ -276,6 +305,51 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     handlers.onMessage({ data: ab } as MessageEvent, ws as unknown as WSContext);
 
     expect(client.stream!.writtenBuffers.length).toBe(0);
+  });
+
+  test("raw text is written to the stream after automation completes", async () => {
+    const ws = makeFakeWs();
+    const completingMock = async () =>
+      ({
+        outcome: "success",
+        adminUsername: "u",
+        adminPassword: "p",
+        webBasePath: "wb",
+        plainTranscript: "",
+      }) satisfies InstallShSetupResult;
+    const { handlers, client } = openHandlers(ws, completingMock, async () => {});
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handlers.onMessage({ data: "ls -la\n" } as MessageEvent, ws as unknown as WSContext);
+
+    expect(client.stream!.writtenBuffers.length).toBe(1);
+    expect(client.stream!.writtenBuffers[0]?.toString("utf8")).toBe("ls -la\n");
+  });
+
+  test("binary Uint8Array input is written to the stream after automation completes", async () => {
+    const ws = makeFakeWs();
+    const completingMock = async () =>
+      ({
+        outcome: "success",
+        adminUsername: "u",
+        adminPassword: "p",
+        webBasePath: "wb",
+        plainTranscript: "",
+      }) satisfies InstallShSetupResult;
+    const { handlers, client } = openHandlers(ws, completingMock, async () => {});
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handlers.onMessage(
+      { data: new Uint8Array([65, 66, 67]) } as MessageEvent,
+      ws as unknown as WSContext,
+    );
+
+    expect(client.stream!.writtenBuffers.length).toBe(1);
+    expect(Array.from(client.stream!.writtenBuffers[0] ?? [])).toEqual([65, 66, 67]);
   });
 
   test("onClose with code 4401 (detach) does NOT end stream or conn synchronously", () => {
@@ -288,13 +362,13 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
     expect(client.ended).toBe(false);
   });
 
-  test("onClose with code 4400 (stop) ends the ssh connection", () => {
+  test("onClose with code 4400 (stop) does NOT end the ssh connection synchronously", () => {
     const ws = makeFakeWs();
     const { handlers, client } = openHandlers(ws);
 
     handlers.onClose({ code: 4400 } as CloseEvent, ws as unknown as WSContext);
 
-    expect(client.ended).toBe(true);
+    expect(client.ended).toBe(false);
   });
 
   test("onClose with normal code 1000 ends the ssh connection", () => {
@@ -320,7 +394,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
       sshPassword: "hunter2",
       getAppSettings: () => FAKE_APP_SETTINGS,
       ClientImpl: FakeClient as unknown as typeof import("ssh2").Client,
-      _runLiveSetupPhases: hangingRunLiveSetupPhases,
+      _runInstallShSetupSession: hangingRunInstallShSetupSession,
     });
     handlers.onOpen(new Event("open"), ws as unknown as WSContext);
 
@@ -354,10 +428,16 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
 
   test("driver sends setupComplete JSON and closes ws when run succeeds", async () => {
     const completingMock = async () =>
-      ({ outcome: "live-success" as const, phases: [] });
+      ({
+        outcome: "success",
+        adminUsername: "u",
+        adminPassword: "p",
+        webBasePath: "wb",
+        plainTranscript: "",
+      }) satisfies InstallShSetupResult;
 
     const ws = makeFakeWs();
-    openHandlers(ws, completingMock);
+    openHandlers(ws, completingMock, async () => {});
 
     // Allow microtasks to flush so the driver's .then fires.
     await Promise.resolve();
@@ -374,10 +454,14 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
 
   test("driver sends setupComplete failed when run returns live-failed", async () => {
     const failingMock = async () =>
-      ({ outcome: "live-failed" as const, phases: [] });
+      ({
+        outcome: "failed",
+        reason: "nope",
+        plainTranscript: "tail",
+      }) satisfies InstallShSetupResult;
 
     const ws = makeFakeWs();
-    openHandlers(ws, failingMock);
+    openHandlers(ws, failingMock, async () => {});
 
     await Promise.resolve();
     await Promise.resolve();

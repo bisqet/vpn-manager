@@ -4,29 +4,18 @@ import type { WSContext } from "hono/ws";
 import type { Database } from "bun:sqlite";
 import type { Env } from "../env";
 import type { AppSettingsDto } from "../db/appSettings";
+import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { buildSsh2ConnectOptions } from "./ssh2ConnectOptions";
 import {
   beginSetupRun,
   endSetupRun,
   signalSetupRunCancel,
 } from "./setupRunRegistry";
-import { runPhaseScriptOnPtyStream } from "./setupShellDriver";
-import { runLiveSetupPhases } from "./setupLivePhaseLoop";
-import type { SetupPhaseResult } from "./setupLivePhaseLoop";
-import { buildSetupPhases } from "./setupPhases";
 import type { ProfileSetupTerminalRow } from "./profileSetupTerminalGate";
-import type { SshExecFn } from "./sshExec";
-
-const XUI_LOCAL_PORT = 2053;
-
-function randomAlnum(length: number): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let s = "";
-  for (let i = 0; i < length; i++) s += alphabet[bytes[i]! % alphabet.length]!;
-  return s;
-}
+import {
+  runInstallShSetupSession,
+  type InstallShSetupResult,
+} from "./runInstallShSetupSession";
 
 /** RFC 6455 close reasons: UTF-8, max 123 bytes (no secrets). */
 function webSocketCloseReasonFromError(err: Error, fallback: string): string {
@@ -53,20 +42,61 @@ function toUint8Array(data: unknown): Uint8Array {
   return new TextEncoder().encode(String(data));
 }
 
-type RunLiveSetupPhasesLike = (options: {
+type SetupShellStream = {
+  on: (event: string, cb: (...args: unknown[]) => void) => void;
+  off?: (event: string, cb: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, cb: (...args: unknown[]) => void) => void;
+  stderr: { on: (event: string, cb: (...args: unknown[]) => void) => void };
+  write: (data: Buffer | string) => void;
+  setWindow: (rows: number, cols: number, height: number, width: number) => void;
+  end: () => void;
+};
+
+type RunInstallShSetupSessionOptions = Parameters<typeof runInstallShSetupSession>[0];
+type RunInstallShSetupSessionLike = (options: RunInstallShSetupSessionOptions) => Promise<InstallShSetupResult>;
+
+async function persistInstallSessionResult(options: {
   db: Database;
   env: Pick<Env, "masterKey">;
   profileId: number;
-  row: { host: string; ssh_port: number; ssh_user: string };
-  phases: Array<{ id: string; title: string; script: string }>;
-  adminUsername: string;
-  adminPassword: string;
-  webBasePath: string;
-  sshPassword: string;
-  exec: SshExecFn;
-  knownHostsFile: string | undefined;
-  signal: AbortSignal;
-}) => Promise<{ outcome: "live-success" | "live-failed"; phases: SetupPhaseResult[] }>;
+  result: InstallShSetupResult;
+}): Promise<void> {
+  const { db, env, profileId, result } = options;
+
+  if (result.outcome === "success") {
+    const { ciphertext, nonce } = await encryptXuiSecretsJson(env.masterKey, {
+      v: 1,
+      adminUsername: result.adminUsername,
+      adminPassword: result.adminPassword,
+    });
+
+    db.query(
+      `UPDATE vpn_profiles SET
+        operational_status = 'working',
+        xui_secrets_ciphertext = ?,
+        xui_secrets_nonce = ?,
+        xui_web_base_path = ?,
+        last_setup_error = NULL,
+        last_setup_at = datetime('now'),
+        updated_at = datetime('now')
+      WHERE id = ?`,
+    ).run(ciphertext, nonce, result.webBasePath, profileId);
+    return;
+  }
+
+  const transcriptTail = result.plainTranscript.trim().slice(-3500);
+  const detail = transcriptTail.length > 0
+    ? `${result.reason}\n\n${transcriptTail}`
+    : result.reason;
+
+  db.query(
+    `UPDATE vpn_profiles SET
+      last_setup_error = ?,
+      last_setup_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE id = ?`,
+  ).run(detail, profileId);
+}
 
 export function createProfileSetupTerminalWebSocketHandlers(options: {
   db: Database;
@@ -76,8 +106,10 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
   sshPassword: string;
   getAppSettings: () => AppSettingsDto;
   ClientImpl?: typeof Client;
-  /** For testing only: replace the live setup phase loop. */
-  _runLiveSetupPhases?: RunLiveSetupPhasesLike;
+  /** For testing only: replace the install.sh setup session. */
+  _runInstallShSetupSession?: typeof runInstallShSetupSession;
+  /** For testing only: override DB persistence after session completion. */
+  _afterInstall?: (result: InstallShSetupResult) => Promise<void>;
 }): {
   onOpen: (evt: Event, ws: WSContext) => void;
   onMessage: (evt: MessageEvent, ws: WSContext) => void;
@@ -91,27 +123,22 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
     sshPassword,
     getAppSettings,
     ClientImpl,
-    _runLiveSetupPhases: runLiveSetupPhasesImpl,
+    _runInstallShSetupSession: runInstallShSetupSessionImpl,
+    _afterInstall: afterInstall,
   } = options;
-
-  type PhaseDataHandler = (chunk: Uint8Array) => void;
 
   const state: {
     conn: InstanceType<typeof Client> | null;
-    stream: {
-      write: (data: Buffer | string) => void;
-      setWindow: (rows: number, cols: number, height: number, width: number) => void;
-      end: () => void;
-    } | null;
-    phaseDataCallback: PhaseDataHandler | null;
+    stream: SetupShellStream | null;
     detached: boolean;
     runEnded: boolean;
+    automationRunning: boolean;
   } = {
     conn: null,
     stream: null,
-    phaseDataCallback: null,
     detached: false,
     runEnded: false,
+    automationRunning: false,
   };
 
   function cleanup() {
@@ -128,7 +155,12 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
   }
 
   const SshClient: typeof Client = ClientImpl ?? Client;
-  const doRunLiveSetupPhases: RunLiveSetupPhasesLike = runLiveSetupPhasesImpl ?? runLiveSetupPhases;
+  const doRunInstallShSetupSession: RunInstallShSetupSessionLike =
+    runInstallShSetupSessionImpl ?? runInstallShSetupSession;
+  const doAfterInstall =
+    afterInstall ??
+    ((result: InstallShSetupResult) =>
+      persistInstallSessionResult({ db, env, profileId, result }));
 
   return {
     onOpen(_evt: Event, ws: WSContext) {
@@ -147,13 +179,7 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
           { term: "xterm-256color", cols: 80, rows: 24 },
           (
             err: Error | undefined,
-            stream: {
-              on: (event: string, cb: (...args: unknown[]) => void) => void;
-              stderr: { on: (event: string, cb: (...args: unknown[]) => void) => void };
-              write: (data: Buffer | string) => void;
-              setWindow: (rows: number, cols: number, height: number, width: number) => void;
-              end: () => void;
-            },
+            stream: SetupShellStream,
           ) => {
             if (err) {
               finalizeRun();
@@ -162,17 +188,21 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
             }
 
             state.stream = stream;
+            state.automationRunning = true;
 
-            // Single data listener: forward bytes to WS and feed phase driver if active.
-            stream.on("data", (data: unknown) => {
+            const ptyDataSubscribers = new Set<(chunk: Uint8Array) => void>();
+            const forwardPtyStdout = (data: unknown) => {
               const bytes = toUint8Array(data);
               try {
                 ws.send(bytes);
               } catch {
                 // ws may already be closed (detach scenario)
               }
-              state.phaseDataCallback?.(bytes);
-            });
+              for (const h of ptyDataSubscribers) {
+                h(bytes);
+              }
+            };
+            stream.on("data", forwardPtyStdout);
 
             stream.stderr.on("data", (data: unknown) => {
               const bytes = toUint8Array(data);
@@ -183,77 +213,26 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
               }
             });
 
-            stream.on("close", () => {
-              finalizeRun();
-              if (!state.detached) {
-                try {
-                  ws.close(1000, "stream closed");
-                } catch {
-                  // already closed
-                }
-              }
-            });
-
-            // Build credentials and phases for this setup run.
-            const settings = getAppSettings();
-            const adminUsername = randomAlnum(12);
-            const adminPassword = randomAlnum(24);
-            const webBasePath = randomAlnum(18);
-
-            const phases = buildSetupPhases({
-              panelHostname: row.panel_hostname,
-              acmeEmail: settings.acmeEmail,
-              xuiLocalPort: XUI_LOCAL_PORT,
-              adminUsername,
-              adminPassword,
-              webBasePath,
-            });
-
-            // PTY-based SshExecFn: re-uses the open shell; ignores host/user/pass in args.
-            const exec: SshExecFn = ({ remoteScript, timeoutMs }) => {
-              return runPhaseScriptOnPtyStream({
-                write: (chunk) => {
-                  if (typeof chunk === "string") {
-                    stream.write(chunk);
-                  } else {
-                    stream.write(
-                      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength),
-                    );
-                  }
-                },
-                onData: (handler: PhaseDataHandler) => {
-                  state.phaseDataCallback = handler;
-                  return () => {
-                    state.phaseDataCallback = null;
-                  };
-                },
-                script: remoteScript,
-                timeoutMs,
-              }).then(({ code, captured }) => ({
-                code,
-                stdout: captured,
-                stderr: "",
-              }));
-            };
-
-            // Run setup driver asynchronously; no idle timer (phase timeout handles it).
-            doRunLiveSetupPhases({
-              db,
-              env,
-              profileId,
-              row: { host: row.host, ssh_port: row.ssh_port, ssh_user: row.ssh_user },
-              phases,
-              adminUsername,
-              adminPassword,
-              webBasePath,
-              sshPassword,
-              exec,
-              knownHostsFile: settings.sshKnownHostsFile ?? undefined,
+            void doRunInstallShSetupSession({
+              write: (data) =>
+                stream.write(
+                  typeof data === "string"
+                    ? data
+                    : Buffer.from(data.buffer, data.byteOffset, data.byteLength),
+                ),
+              subscribePtyData: (handler) => {
+                ptyDataSubscribers.add(handler);
+                return () => {
+                  ptyDataSubscribers.delete(handler);
+                };
+              },
+              panelHostname: row.panel_hostname.trim(),
               signal,
             })
-              .then((result) => {
-                const outcome =
-                  result.outcome === "live-success" ? "success" : "failed";
+              .then(async (result) => {
+                state.automationRunning = false;
+                await doAfterInstall(result);
+                const outcome = result.outcome;
                 try {
                   ws.send(JSON.stringify({ type: "setupComplete", outcome }));
                   ws.close(1000, "done");
@@ -262,6 +241,7 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
                 }
               })
               .catch((driverErr: unknown) => {
+                state.automationRunning = false;
                 try {
                   ws.send(JSON.stringify({ type: "setupComplete", outcome: "failed" }));
                   const reason =
@@ -326,10 +306,26 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
           const cols = typeof msg.cols === "number" ? msg.cols : 80;
           const rows = typeof msg.rows === "number" ? msg.rows : 24;
           state.stream.setWindow(rows, cols, 0, 0);
+          return;
         }
-        // All other text messages are ignored (no keystrokes forwarded to host).
+
+        if (state.automationRunning) {
+          return;
+        }
+
+        state.stream.write(Buffer.from(data, "utf8"));
+        return;
       }
-      // Binary messages are also ignored (viewer-only, no raw input forwarding).
+
+      if (state.automationRunning) {
+        return;
+      }
+
+      if (data instanceof ArrayBuffer) {
+        state.stream.write(Buffer.from(data));
+      } else if (data instanceof Uint8Array) {
+        state.stream.write(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+      }
     },
 
     onClose(evt: CloseEvent, _ws: WSContext) {
@@ -342,8 +338,8 @@ export function createProfileSetupTerminalWebSocketHandlers(options: {
       }
 
       if (code === 4400) {
-        // "Stop setup": abort signal so driver exits at next phase boundary.
         signalSetupRunCancel(profileId);
+        return;
       }
 
       finalizeRun();
