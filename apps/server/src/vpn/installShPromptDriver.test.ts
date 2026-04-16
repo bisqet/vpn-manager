@@ -167,6 +167,28 @@ describe("runPromptDriver", () => {
     expect(writes.filter((w) => w === "n\n").length).toBe(1);
   });
 
+  test("completionIncludes settles completed after rules (second chunk)", async () => {
+    const writes: string[] = [];
+    const result = await runPromptDriver({
+      write: (s) => writes.push(s),
+      subscribeData: (cb) => {
+        cb(encoder.encode("Would you like to customize the Panel Port settings? [y/n]: \n"));
+        queueMicrotask(() => {
+          cb(encoder.encode("Panel Installation Complete!\n"));
+        });
+        return () => {};
+      },
+      rules: createInstallShPromptRules({ panelHostname: "panel.example.com", isPanelIp: false }),
+      plaintext: createPtyPlaintextBuffer(),
+      globalTimeoutMs: 30_000,
+      signal: new AbortController().signal,
+      completionIncludes: "Panel Installation Complete",
+    });
+
+    expect(writes).toEqual(["n\n"]);
+    expect(result.status).toBe("completed");
+  });
+
   test("global idle timeout returns lastRuleId after a write", async () => {
     const writes: string[] = [];
     const result = await runPromptDriver({

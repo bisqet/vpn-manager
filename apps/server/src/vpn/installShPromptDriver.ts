@@ -2,9 +2,8 @@
  * Expect-style prompt handling for MHSanaei/3x-ui `install.sh` over a PTY.
  * `whenIncludes` strings are matched against decoded plaintext (see `ptyPlaintext.ts`).
  *
- * The result `status: "completed"` is reserved for a future session hook that can signal
- * stream end alongside the `subscribeData` cleanup path; today callers end the driver with
- * `AbortSignal` or `globalTimeoutMs`.
+ * When {@link RunPromptDriverOptions.completionIncludes} appears in plaintext after a chunk,
+ * the driver settles with `status: "completed"` (install script reached the final banner).
  */
 
 export type PromptRule = {
@@ -94,6 +93,8 @@ export type RunPromptDriverOptions = {
   };
   globalTimeoutMs: number;
   signal: AbortSignal;
+  /** When plaintext includes this substring, resolve `completed` (checked after each chunk). */
+  completionIncludes?: string;
 };
 
 export type RunPromptDriverResult =
@@ -110,7 +111,7 @@ function lineForReadRp(send: string): string {
  * the first chunk and resets after each successful rule write.
  */
 export async function runPromptDriver(options: RunPromptDriverOptions): Promise<RunPromptDriverResult> {
-  const { write, subscribeData, rules, plaintext, globalTimeoutMs, signal } = options;
+  const { write, subscribeData, rules, plaintext, globalTimeoutMs, signal, completionIncludes } = options;
 
   let settled = false;
   let lastRuleId: string | undefined;
@@ -169,6 +170,9 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
       write(lineForReadRp(rule.send));
       bumpGlobalTimer();
       return;
+    }
+    if (completionIncludes && text.includes(completionIncludes)) {
+      settle({ status: "completed", lastRuleId });
     }
   };
 
