@@ -1,7 +1,7 @@
 # 3x-ui `install.sh`–driven setup terminal (SSH-parity PTY + auto-prompts + transcript credentials) — design
 
 **Date:** 2026-04-16  
-**Status:** Draft — awaiting product review  
+**Status:** Approved (2026-04-16)  
 **Supersedes (for setup automation content):** `2026-04-15-setup-via-terminal-design.md` describes the **previous** model (phased `buildSetupPhases`, viewer-only client, Caddy-backed HTTPS). This spec replaces that **automation** story while keeping the **same route and sheet** where practical (`GET /api/profiles/:id/setup-terminal`, Pending gates, mutex, detach/stop semantics unless revised below).
 
 ## Decision log
