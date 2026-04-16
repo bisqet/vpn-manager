@@ -88,3 +88,11 @@ git commit -m "feat(web): drop SSH port and user from VPNs table"
 **2. Inline execution** — run all steps in this session with executing-plans checkpoints.
 
 Which approach do you want?
+
+---
+
+## Execution log (2026-04-17)
+
+Implemented inline in the main workspace: `VpnsPage` table now has **Label**, **IP or Host**, **Panel**, **Panel user**, **Panel pass**, **Status**, **Actions** (SSH port and SSH user columns removed per spec).
+
+Follow-up commit restored `SetupTerminalSheet` disconnected-overlay behavior (`runOutcome` / success vs failed messaging) that had been accidentally altered during the same editing session.
