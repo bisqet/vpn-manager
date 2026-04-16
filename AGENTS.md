@@ -35,7 +35,12 @@ VPN Manager is a monorepo with two apps — a Hono API server (`apps/server`, po
 - Prefers an in-app **modal overlay** (large panel) over the browser **Fullscreen API** when expanding embedded diagrams such as the Chains **traffic diagram**.
 - When executing multi-task implementation plans, may choose **subagent-driven** execution (separate subagents per task with review between tasks) instead of doing every step in one chat.
 - For diagram-style views in the web app, prefers **pointer drag to pan**, **mouse wheel zoom without a modifier key**, and a visible **Reset view** control.
+- After a reproduced issue is fixed, expects **temporary debug logs, telemetry, and other one-off instrumentation** to be removed rather than left in the tree.
 
 ## Learned Workspace Facts
 
 - From the repo root, **`bun run dev`** starts both workspaces’ dev servers via `bun run --filter "./apps/*" dev` in the root **`package.json`**.
+- Password-based SSH from the VPN Manager machine expects **`sshpass`** to be installed where the server runs.
+- **`DELETE /api/profiles/:id?force=true`** (or **`force=1`**) removes **`chain_hops`** that reference the profile (with cascade to their routing data), **renumbers** remaining hops per chain, **deletes** chains that would have zero hops, then deletes the profile; **`DELETE`** without **`force`** still returns **409** when hops reference the profile.
+- **Live browser SSH** can be enabled with an **empty ACME email** in app settings; Caddy-related setup omits the global email block when ACME email is empty.
+- Per-hop routing **`default_action`** allows **`use_chain`**, **`direct`**, and **`block`**; the **terminal hop** in a chain must not default to **`use_chain`** (only **`direct`** or **`block`**).
