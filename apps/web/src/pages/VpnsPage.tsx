@@ -1127,9 +1127,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
               <thead>
                 <tr>
                   <th style={tableHeadCellStyle}>Label</th>
-                  <th style={tableHeadCellStyle}>IP or Host</th>
                   <th style={tableHeadCellStyle}>SSH port</th>
-                  <th style={tableHeadCellStyle}>SSH user</th>
                   <th style={tableHeadCellStyle}>Panel</th>
                   <th style={tableHeadCellStyle} title="Copy 3x-ui panel admin username">
                     Panel user
@@ -1154,9 +1152,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                   return (
                     <tr key={profile.id}>
                       <td style={tableBodyCellStyle}>{profile.label}</td>
-                      <td style={tableBodyCellStyle}>{profile.host}</td>
                       <td style={tableBodyCellStyle}>{profile.sshPort}</td>
-                      <td style={tableBodyCellStyle}>{profile.sshUser}</td>
                       <td style={tableBodyCellStyle}>
                         {profile.panelUrl ? (
                           <a
