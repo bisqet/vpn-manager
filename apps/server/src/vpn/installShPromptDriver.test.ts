@@ -118,6 +118,32 @@ describe("runPromptDriver", () => {
     expect(writes).toEqual(["n\n"]);
   });
 
+  test("sequential chunks answer stacked install.sh prompts in order", async () => {
+    const writes: string[] = [];
+    const ac = new AbortController();
+    const port =
+      "Would you like to customize the Panel Port settings? [y/n]: \n";
+    const ssl = "Choose an option (default 2 for IP): \n";
+
+    await runPromptDriver({
+      write: (s) => writes.push(s),
+      subscribeData: (cb) => {
+        cb(encoder.encode(port));
+        queueMicrotask(() => {
+          cb(encoder.encode(ssl));
+          queueMicrotask(() => ac.abort());
+        });
+        return () => {};
+      },
+      rules: createInstallShPromptRules({ panelHostname: "panel.example.com", isPanelIp: false }),
+      plaintext: createPtyPlaintextBuffer(),
+      globalTimeoutMs: 30_000,
+      signal: ac.signal,
+    });
+
+    expect(writes).toEqual(["n\n", "1\n"]);
+  });
+
   test("fires each rule id at most once", async () => {
     const writes: string[] = [];
     const ac = new AbortController();

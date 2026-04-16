@@ -40,7 +40,7 @@ export function createInstallShPromptRules(ctx: CreateInstallShPromptRulesCtx): 
     },
     {
       id: "panel-cert-for-panel",
-      whenIncludes: "Would you like to set this certificate for the panel?",
+      whenIncludes: "Would you like to set this certificate for the panel? (y/n):",
       send: "y",
       timeoutMs: 120_000,
     },
@@ -58,7 +58,7 @@ export function createInstallShPromptRules(ctx: CreateInstallShPromptRulesCtx): 
     },
     {
       id: "ipv6-include",
-      whenIncludes: "Do you have an IPv6 address to include?",
+      whenIncludes: "Do you have an IPv6 address to include? (leave empty to skip):",
       send: "\n",
       timeoutMs: 120_000,
     },
@@ -70,7 +70,7 @@ export function createInstallShPromptRules(ctx: CreateInstallShPromptRulesCtx): 
     },
     {
       id: "acme-reloadcmd",
-      whenIncludes: "Would you like to modify --reloadcmd",
+      whenIncludes: "Would you like to modify --reloadcmd for ACME? (y/n):",
       send: "n",
       timeoutMs: 120_000,
     },
@@ -154,8 +154,12 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
   }
   signal.addEventListener("abort", onAbort, { once: true });
 
-  /** At most one rule per incoming chunk (see unit tests for substring ordering). */
-  const processPlaintextOnce = () => {
+  /**
+   * One reply per `onChunk` call: first match in `rules` iteration order (see tests for why
+   * `createInstallShPromptRules` sorts by longest `whenIncludes`). Additional prompts in the
+   * same PTY read are handled on subsequent chunks.
+   */
+  const processPlaintext = (): void => {
     const text = plaintext.getPlaintext();
     for (const rule of rules) {
       if (fired.has(rule.id)) continue;
@@ -173,7 +177,7 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
     if (globalTimer === undefined) {
       bumpGlobalTimer();
     }
-    processPlaintextOnce();
+    processPlaintext();
   };
 
   userUnsubscribe = subscribeData(onChunk);
