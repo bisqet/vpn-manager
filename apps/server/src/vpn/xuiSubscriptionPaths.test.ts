@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { makeDistinctSubscriptionPathDbValues } from "./xuiSubscriptionPaths";
+import {
+  bashPersistSubscriptionPathsToSqlite,
+  makeDistinctSubscriptionPathDbValues,
+} from "./xuiSubscriptionPaths";
 
 describe("makeDistinctSubscriptionPathDbValues", () => {
   test("returns distinct paths with slashes and not defaults", () => {
@@ -12,6 +15,13 @@ describe("makeDistinctSubscriptionPathDbValues", () => {
     expect(got.subPathDb.endsWith("/")).toBe(true);
     expect(got.subJsonPathDb.startsWith("/")).toBe(true);
     expect(got.subJsonPathDb.endsWith("/")).toBe(true);
+  });
+
+  test("bash sqlite fragment uses delete+insert for missing rows", () => {
+    const sh = bashPersistSubscriptionPathsToSqlite("/etc/x-ui/x-ui.db", "/Aa1/", "/Bb2/");
+    expect(sh).toContain("DELETE FROM settings WHERE key='subPath'");
+    expect(sh).toContain("INSERT INTO settings (key, value) VALUES ('subPath', '/Aa1/')");
+    expect(sh).toContain("test \"$sub_v\" = '/Aa1/'");
   });
 
   test("segments are not equal to stripped webBasePath", () => {

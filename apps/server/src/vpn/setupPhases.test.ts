@@ -28,7 +28,8 @@ describe("buildSetupPhases", () => {
     expect(expectUrl).not.toBeNull();
     expect(joined).toContain(expectUrl!);
     expect(joined).toContain("/etc/x-ui/x-ui.db");
-    expect(joined).toContain("UPDATE settings");
+    expect(joined).toContain("DELETE FROM settings");
+    expect(joined).toContain("INSERT INTO settings");
     expect(joined).toContain("subPath");
     expect(joined).toContain("subJsonPath");
     expect(joined).toContain("systemctl stop");

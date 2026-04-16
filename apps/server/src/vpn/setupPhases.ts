@@ -1,4 +1,5 @@
 import { buildPanelLoopbackHttpUrl } from "../net/panelAddress";
+import { bashPersistSubscriptionPathsToSqlite, XUI_PANEL_SETTINGS_DB } from "./xuiSubscriptionPaths";
 
 /**
  * Ordered remote setup phases for 3x-ui on Ubuntu 24 (panel bound to loopback).
@@ -46,6 +47,7 @@ export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
   const { xuiLocalPort, adminUsername, adminPassword, webBasePath, subPathDb, subJsonPathDb } = ctx;
   const loopbackUrl = buildPanelLoopbackHttpUrl(xuiLocalPort, webBasePath);
   if (loopbackUrl === null) throw new Error("buildSetupPhases: loopback panel URL unexpectedly empty");
+  const sqlitePersist = bashPersistSubscriptionPathsToSqlite(XUI_PANEL_SETTINGS_DB, subPathDb, subJsonPathDb);
 
   const preflight: SetupPhase = {
     id: "preflight",
@@ -110,14 +112,8 @@ ${XUI_BIN} setting -username '${adminUsername}' -password '${adminPassword}' -po
 systemctl restart ${XUI_SYSTEMD}
 sleep 2
 systemctl is-active --quiet ${XUI_SYSTEMD}
-XUI_DB=/etc/x-ui/x-ui.db
-test -f "$XUI_DB"
-command -v sqlite3 >/dev/null || { export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq sqlite3; }
 systemctl stop ${XUI_SYSTEMD}
-sub_changes=$(sqlite3 "$XUI_DB" "UPDATE settings SET value='${subPathDb}' WHERE key='subPath'; SELECT changes();")
-json_changes=$(sqlite3 "$XUI_DB" "UPDATE settings SET value='${subJsonPathDb}' WHERE key='subJsonPath'; SELECT changes();")
-test "$sub_changes" = "1"
-test "$json_changes" = "1"
+${sqlitePersist}
 systemctl start ${XUI_SYSTEMD}
 sleep 2
 systemctl is-active --quiet ${XUI_SYSTEMD}
