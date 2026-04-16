@@ -7,7 +7,7 @@ import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
 import { buildVlessRealityInboundBody } from "../xui/buildVlessRealityInboundBody";
 import { generateRealityClientMaterial } from "../xui/realityKeyMaterial";
-import { PanelRequestError, provisionChainClientAccess } from "../xui/provisionChainClientAccess";
+import { provisionChainClientAccess } from "../xui/provisionChainClientAccess";
 
 type ChainListRow = {
   chain_id: number;
@@ -434,14 +434,9 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
         fetchFn: globalThis.fetch,
       });
       return c.json(result);
-    } catch (err) {
-      const details =
-        err instanceof PanelRequestError
-          ? err.panelMessage
-          : err instanceof Error
-            ? err.message
-            : "Unknown error";
-      return c.json({ error: "Panel request failed.", details }, 502);
+    } catch {
+      // Do not forward panel or transport exception text to the client (avoid leaking internals).
+      return c.json({ error: "Panel request failed." }, 502);
     }
   });
 

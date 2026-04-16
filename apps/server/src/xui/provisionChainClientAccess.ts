@@ -25,8 +25,8 @@ function normalizePanelBaseUrl(panelBaseUrl: string): string {
 }
 
 /**
- * Default subscription path segment for MHSanaei/3x-ui (`sub/subController.go`: `GET {subPath}:subid`).
- * Resolved relative to the panel base URL the operator uses in the browser.
+ * Default subscription path for MHSanaei/3x-ui: `{base}sub/{subId}` (same origin as the panel URL).
+ * If an install uses a non-default sub path or host, this may need a panel-derived URL later.
  */
 export function buildSubscriptionUrl(panelBaseUrl: string, subId: string): string {
   const base = normalizePanelBaseUrl(panelBaseUrl);
@@ -57,6 +57,9 @@ function assertPanelJson(value: unknown): asserts value is PanelJson {
 }
 
 async function readPanelJson(response: Response): Promise<PanelJson> {
+  if (!response.ok) {
+    throw new PanelRequestError(`panel HTTP ${response.status}`);
+  }
   let body: unknown;
   try {
     body = await response.json();
