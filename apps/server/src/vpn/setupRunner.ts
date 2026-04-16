@@ -1,16 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { decryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { getAppSettings } from "../db/appSettings";
-import {
-  buildSetupPhases,
-  PLACEHOLDER_ADMIN_PASS,
-  PLACEHOLDER_ADMIN_USER,
-  PLACEHOLDER_WEB_BASE_PATH,
-} from "./setupPhases";
-import type { SshExecFn } from "./sshExec";
-import { buildSshExecUsingSpawn } from "./sshExec";
-import { runLiveSetupPhases } from "./setupLivePhaseLoop";
 
 export type SetupPhaseResult = {
   id: string;
@@ -21,22 +11,12 @@ export type SetupPhaseResult = {
   code?: number;
 };
 
-export type SetupResult =
-  | { mode: "dry-run"; phases: SetupPhaseResult[] }
-  | { mode: "live"; phases: SetupPhaseResult[] };
+export type SetupResult = { mode: "dry-run"; phases: SetupPhaseResult[] };
 
 type SetupEnv = Pick<Env, "masterKey">;
 
-const XUI_LOCAL_PORT = 2053;
-
-function randomAlnum(length: number): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let s = "";
-  for (let i = 0; i < length; i++) s += alphabet[bytes[i]! % alphabet.length]!;
-  return s;
-}
+const UPSTREAM_INSTALL_SH_CMD =
+  "bash <(curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)";
 
 export type ProfileSetupRow = {
   id: number;
@@ -57,10 +37,11 @@ export type ProfileSetupRow = {
   updated_at: string;
 };
 
-export type ExecuteProfileSetupOutcome =
-  | { outcome: "dry-run"; profileRow: ProfileSetupRow; setup: Extract<SetupResult, { mode: "dry-run" }> }
-  | { outcome: "live-success"; profileRow: ProfileSetupRow; setup: Extract<SetupResult, { mode: "live" }> }
-  | { outcome: "live-failed"; profileRow: ProfileSetupRow; setup: Extract<SetupResult, { mode: "live" }> };
+export type ExecuteProfileSetupOutcome = {
+  outcome: "dry-run";
+  profileRow: ProfileSetupRow;
+  setup: SetupResult;
+};
 
 function getProfileForSetup(db: Database, id: number): ProfileSetupRow | null {
   return (
@@ -90,14 +71,30 @@ function getProfileForSetup(db: Database, id: number): ProfileSetupRow | null {
   );
 }
 
+function dryRunInstallShPhase(): SetupPhaseResult {
+  return {
+    id: "upstream_install_sh",
+    title: "3x-ui (upstream install.sh)",
+    script: `When VPN_SSH_ENABLED is true, live provisioning runs only in the browser **Setup** terminal (WebSocket).
+
+On the target host as root, the server drives the same non-login shell and runs:
+
+${UPSTREAM_INSTALL_SH_CMD}
+
+Prompts are answered automatically; panel credentials are parsed from the script output.`,
+  };
+}
+
+/**
+ * Returns a **dry-run** description when `vpnSshEnabled` is false.
+ * When SSH is enabled, live setup uses `GET /api/profiles/:id/setup-terminal` only — this function **rejects**.
+ */
 export async function executeProfileSetup(options: {
   db: Database;
   env: SetupEnv;
   profileId: number;
-  sshExec?: SshExecFn;
 }): Promise<ExecuteProfileSetupOutcome> {
-  const { db, env, profileId } = options;
-  const sshExec = options.sshExec ?? buildSshExecUsingSpawn();
+  const { db, profileId } = options;
   const settings = getAppSettings(db);
 
   const row = getProfileForSetup(db, profileId);
@@ -113,63 +110,16 @@ export async function executeProfileSetup(options: {
     throw Object.assign(new Error("panel_hostname_required"), { status: 400 as const });
   }
 
-  if (!settings.vpnSshEnabled) {
-    const phases = buildSetupPhases({
-      panelHostname: row.panel_hostname,
-      acmeEmail: settings.acmeEmail,
-      xuiLocalPort: XUI_LOCAL_PORT,
-      adminUsername: PLACEHOLDER_ADMIN_USER,
-      adminPassword: PLACEHOLDER_ADMIN_PASS,
-      webBasePath: PLACEHOLDER_WEB_BASE_PATH,
-    });
-    return {
-      outcome: "dry-run",
-      profileRow: row,
-      setup: {
-        mode: "dry-run",
-        phases: phases.map((p) => ({ id: p.id, title: p.title, script: p.script })),
-      },
-    };
+  if (settings.vpnSshEnabled) {
+    throw Object.assign(new Error("live_setup_requires_setup_terminal"), { status: 501 as const });
   }
 
-  const sshPassword = await decryptVpnPassword(
-    env.masterKey,
-    row.ssh_password_ciphertext,
-    row.ssh_password_nonce,
-  );
-
-  const adminUsername = randomAlnum(12);
-  const adminPassword = randomAlnum(24);
-  const webBasePath = randomAlnum(18);
-
-  const phases = buildSetupPhases({
-    panelHostname: row.panel_hostname,
-    acmeEmail: settings.acmeEmail,
-    xuiLocalPort: XUI_LOCAL_PORT,
-    adminUsername,
-    adminPassword,
-    webBasePath,
-  });
-
-  const neverAborted = new AbortController();
-  const live = await runLiveSetupPhases({
-    db,
-    env,
-    profileId,
-    row: { host: row.host, ssh_port: row.ssh_port, ssh_user: row.ssh_user },
-    phases,
-    adminUsername,
-    adminPassword,
-    webBasePath,
-    sshPassword,
-    exec: sshExec,
-    knownHostsFile: settings.sshKnownHostsFile ?? undefined,
-    signal: neverAborted.signal,
-  });
-
-  const updated = getProfileForSetup(db, profileId)!;
-  if (live.outcome === "live-failed") {
-    return { outcome: "live-failed", profileRow: updated, setup: { mode: "live", phases: live.phases } };
-  }
-  return { outcome: "live-success", profileRow: updated, setup: { mode: "live", phases: live.phases } };
+  return {
+    outcome: "dry-run",
+    profileRow: row,
+    setup: {
+      mode: "dry-run",
+      phases: [dryRunInstallShPhase()],
+    },
+  };
 }

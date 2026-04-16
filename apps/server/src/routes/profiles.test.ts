@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SESSION_COOKIE } from "../auth/cookie";
+import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { decryptVpnPassword, encryptVpnPassword } from "../crypto/vpnSecret";
 import { putTestAppSettings } from "../db/appSettings";
 import { migrate } from "../db/migrate";
@@ -9,6 +10,33 @@ import { createApp } from "../index";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
 import { executeProfileSetup } from "../vpn/setupRunner";
 import type { SshExecFn } from "../vpn/sshExec";
+
+async function seedWorkingProfileAfterInstall(
+  db: Database,
+  masterKey: Uint8Array,
+  profileId: number,
+  opts: { webBasePath?: string; adminUsername?: string; adminPassword?: string } = {},
+) {
+  const webBasePath = opts.webBasePath ?? "webpath123456789012";
+  const adminUsername = opts.adminUsername ?? "paneluserabc";
+  const adminPassword = opts.adminPassword ?? "panelpassxyz";
+  const { ciphertext, nonce } = await encryptXuiSecretsJson(masterKey, {
+    v: 1,
+    adminUsername,
+    adminPassword,
+  });
+  db.query(
+    `UPDATE vpn_profiles SET
+      operational_status = 'working',
+      xui_secrets_ciphertext = ?,
+      xui_secrets_nonce = ?,
+      xui_web_base_path = ?,
+      last_setup_error = NULL,
+      last_setup_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE id = ?`,
+  ).run(ciphertext, nonce, webBasePath, profileId);
+}
 
 type ProfileRow = {
   id: number;
@@ -397,8 +425,8 @@ describe("profilesRoutes", () => {
     const body = await setupRes.json();
     expect(body.profile.operationalStatus).toBe("pending");
     expect(body.setup.mode).toBe("dry-run");
-    expect(body.setup.phases.length).toBeGreaterThanOrEqual(7);
-    expect(body.setup.phases[0].id).toBe("preflight");
+    expect(body.setup.phases.length).toBe(1);
+    expect(body.setup.phases[0].id).toBe("upstream_install_sh");
 
     const row = db.query<{ operational_status: string }, []>(
       "SELECT operational_status FROM vpn_profiles WHERE id = 1",
@@ -440,51 +468,13 @@ describe("profilesRoutes", () => {
     expect(body.error).toBe("Live setup runs in the browser terminal");
   });
 
-  test("executeProfileSetup live path succeeds with fake ssh when ACME email empty", async () => {
-    putTestAppSettings(db, {
-      acmeEmail: "",
-      vpnSshEnabled: true,
-      sshKnownHostsFile: null,
-    });
-    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
-
-    await app.request("/api/profiles", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: `${SESSION_COOKIE}=session-token`,
-      },
-      body: JSON.stringify({
-        label: "NoAcme",
-        host: "10.0.0.2",
-        sshPort: 22,
-        sshUser: "root",
-        sshPassword: "secretpw",
-        panelHostname: "panel.noacme.example.com",
-      }),
-    });
-
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
-    expect(setupOutcome.setup.mode).toBe("live");
-    expect(setupOutcome.profileRow.operational_status).toBe("working");
-  });
-
-  test("executeProfileSetup live path succeeds with fake ssh", async () => {
+  test("executeProfileSetup rejects when VPN_SSH_ENABLED is true", async () => {
     putTestAppSettings(db, {
       acmeEmail: "ops@example.com",
       vpnSshEnabled: true,
       sshKnownHostsFile: null,
     });
-    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
-
+    const app = createApp(db, env);
     await app.request("/api/profiles", {
       method: "POST",
       headers: {
@@ -501,22 +491,14 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
-    expect(setupOutcome.setup.mode).toBe("live");
-    expect(setupOutcome.profileRow.operational_status).toBe("working");
-    const row = db
-      .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
-        "SELECT operational_status, xui_web_base_path FROM vpn_profiles WHERE id = 1",
-      )
-      .get();
-    expect(row?.operational_status).toBe("working");
-    expect(row?.xui_web_base_path).toBeTruthy();
+    let err: unknown;
+    try {
+      await executeProfileSetup({ db, env: { masterKey: env.masterKey }, profileId: 1 });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toMatchObject({ status: 501 });
+    expect((err as Error).message).toBe("live_setup_requires_setup_terminal");
   });
 
   test("GET /api/profiles returns panelUrl null without session when profile working", async () => {
@@ -525,8 +507,7 @@ describe("profilesRoutes", () => {
       vpnSshEnabled: true,
       sshKnownHostsFile: null,
     });
-    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env);
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -544,13 +525,7 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     const listRes = await app.request("/api/profiles");
     expect(listRes.status).toBe(200);
@@ -570,8 +545,7 @@ describe("profilesRoutes", () => {
       vpnSshEnabled: true,
       sshKnownHostsFile: null,
     });
-    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env);
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -589,13 +563,11 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1, {
+      adminUsername: "paneluserabc",
+      adminPassword: "panelpassxyz",
+      webBasePath: "webpath123456789012",
     });
-    expect(setupOutcome.outcome).toBe("live-success");
 
     const dbRow = db
       .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
@@ -613,8 +585,8 @@ describe("profilesRoutes", () => {
       adminPassword: string;
       panelUrl: string;
     };
-    expect(body.adminUsername.length).toBeGreaterThan(0);
-    expect(body.adminPassword.length).toBeGreaterThan(0);
+    expect(body.adminUsername).toBe("paneluserabc");
+    expect(body.adminPassword).toBe("panelpassxyz");
     expect(body.panelUrl.length).toBeGreaterThan(0);
     expect(body.panelUrl).toBe(buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path));
   });
@@ -662,8 +634,7 @@ describe("profilesRoutes", () => {
       vpnSshEnabled: true,
       sshKnownHostsFile: null,
     });
-    const fakeSsh: SshExecFn = async () => ({ code: 0, stdout: "ok", stderr: "" });
-    const app = createApp(db, env, { profiles: { sshExec: fakeSsh } });
+    const app = createApp(db, env);
 
     await app.request("/api/profiles", {
       method: "POST",
@@ -681,13 +652,7 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     const dbRow = db
       .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
@@ -1108,13 +1073,7 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     const clearRes = await app.request("/api/profiles/1/clear-server", {
       method: "POST",
@@ -1174,13 +1133,7 @@ describe("profilesRoutes", () => {
       }),
     });
 
-    const setupOutcome = await executeProfileSetup({
-      db,
-      env: { masterKey: env.masterKey },
-      profileId: 1,
-      sshExec: fakeSsh,
-    });
-    expect(setupOutcome.outcome).toBe("live-success");
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     teardownPhase = "clear";
     clearCallIndex = 0;

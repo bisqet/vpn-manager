@@ -1,7 +1,7 @@
 # VPN profile setup via in-browser terminal (server-driven) — design
 
 **Date:** 2026-04-15  
-**Status:** Approved for implementation planning  
+**Status:** Superseded for **automation** by `2026-04-16-install-sh-setup-terminal-design.md` (install.sh + transcript credentials). Retained as reference for **WebSocket / detach** UX; phased `buildSetupPhases` automation described below is no longer the live setup-terminal path.  
 **Scope:** Change **Setup** so it opens the **in-app terminal** (xterm) on a **dedicated WebSocket**, with the **VPN Manager server** driving provisioning **automatically** through that **single interactive shell** (PTY). **Interactive SSH** (existing row action) remains unchanged. **Clear server** / teardown is **out of scope** unless a follow-up spec extends the same pattern.
 
 ## Relationship to other specs

@@ -222,28 +222,9 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         db,
         env: { masterKey: env.masterKey },
         profileId: id,
-        sshExec: options.sshExec,
       });
 
       const setupSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
-      if (result.outcome === "dry-run") {
-        return c.json({
-          profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
-          setup: result.setup,
-        });
-      }
-
-      if (result.outcome === "live-failed") {
-        return c.json(
-          {
-            error: "VPN setup failed",
-            profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
-            setup: result.setup,
-          },
-          500,
-        );
-      }
-
       return c.json({
         profile: toProfileDto(result.profileRow as VpnProfileRow, setupSessionUserId),
         setup: result.setup,
