@@ -40,7 +40,7 @@ export function createApp(
 
   const authed = new Hono();
   authed.use("*", requireAuth(db));
-  authed.route("/chains", chainsRoutes(db));
+  authed.route("/chains", chainsRoutes(db, { masterKey: env.masterKey }));
   authed.route("/routing", routingRoutes(db));
   authed.route("/import", importRoutes(db, env));
   authed.route("/settings", settingsRoutes(db));

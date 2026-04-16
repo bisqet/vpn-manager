@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SESSION_COOKIE } from "../auth/cookie";
+import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
-import { migrate } from "../db/migrate";
 
 type RoutingProfileRow = {
   id: number;
@@ -53,6 +54,25 @@ describe("chainsRoutes", () => {
       Date.now() + 60_000,
     );
   });
+
+  async function seedWorkingVpnProfile(dbConn: Database, masterKey: Uint8Array, profileId: number) {
+    const { ciphertext, nonce } = await encryptXuiSecretsJson(masterKey, {
+      v: 1,
+      adminUsername: "admin",
+      adminPassword: "secret",
+    });
+    dbConn.query(
+      `UPDATE vpn_profiles SET
+        operational_status = 'working',
+        panel_hostname = 'panel.test',
+        xui_secrets_ciphertext = ?,
+        xui_secrets_nonce = ?,
+        xui_web_base_path = ?,
+        xui_panel_port = ?,
+        last_setup_error = NULL
+      WHERE id = ?`,
+    ).run(ciphertext, nonce, "webpath12", null, profileId);
+  }
 
   function seedVpnProfile(label: string) {
     const result = db
@@ -380,5 +400,157 @@ describe("chainsRoutes", () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "vpnProfileIds must contain at least one profile id" });
+  });
+
+  test("generate-profile returns 400 for multi-hop chain", async () => {
+    const app = createApp(db, env);
+    const firstProfileId = seedVpnProfile("Alpha");
+    const secondProfileId = seedVpnProfile("Beta");
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Two hops",
+        vpnProfileIds: [firstProfileId, secondProfileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const res = await app.request("/api/chains/1/generate-profile", {
+      method: "POST",
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Generate profile requires a single-hop chain." });
+  });
+
+  test("generate-profile returns 404 when chain is missing", async () => {
+    const app = createApp(db, env);
+
+    const res = await app.request("/api/chains/99/generate-profile", {
+      method: "POST",
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Chain not found" });
+  });
+
+  test("generate-profile returns 409 when single-hop profile is pending", async () => {
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const res = await app.request("/api/chains/1/generate-profile", {
+      method: "POST",
+      headers: {
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "VPN profile must be working with stored panel credentials.",
+    });
+  });
+
+  test("generate-profile returns 200 with share and subscription URLs when panel succeeds", async () => {
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+    await seedWorkingVpnProfile(db, env.masterKey, profileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/login")) {
+        expect(init?.method).toBe("POST");
+        const headers = new Headers(init?.headers);
+        expect(headers.get("content-type")?.toLowerCase()).toContain("application/x-www-form-urlencoded");
+        const params = new URLSearchParams(init?.body as string);
+        expect(params.get("username")).toBe("admin");
+        expect(params.get("password")).toBe("secret");
+
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/add")) {
+        const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
+        const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
+        const addObj = {
+          port: inboundBody.port,
+          protocol: "vless",
+          settings: JSON.stringify(settingsClients),
+          streamSettings: inboundBody.streamSettings,
+        };
+
+        return new Response(JSON.stringify({ success: true, msg: "created", obj: addObj }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { vlessShareLink: string; subscriptionUrl: string };
+      expect(typeof body.vlessShareLink).toBe("string");
+      expect(typeof body.subscriptionUrl).toBe("string");
+      expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
+      expect(body.subscriptionUrl).toContain("/sub/");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

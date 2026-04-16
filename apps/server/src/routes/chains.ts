@@ -1,7 +1,13 @@
 import type { Database } from "bun:sqlite";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import type { Env } from "../env";
 import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
+import { buildPanelHttpsUrl } from "../net/panelAddress";
+import { buildVlessRealityInboundBody } from "../xui/buildVlessRealityInboundBody";
+import { generateRealityClientMaterial } from "../xui/realityKeyMaterial";
+import { PanelRequestError, provisionChainClientAccess } from "../xui/provisionChainClientAccess";
 
 type ChainListRow = {
   chain_id: number;
@@ -281,7 +287,7 @@ function insertRoutingProfilesForHops(db: Database, chainId: number, chainName: 
   }
 }
 
-export function chainsRoutes(db: Database) {
+export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
   const app = new Hono();
 
   app.get("/", (c) => {
@@ -343,6 +349,99 @@ export function chainsRoutes(db: Database) {
         return c.json({ error: error.message }, 404);
       }
       throw error;
+    }
+  });
+
+  app.post("/:id/generate-profile", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid chain id" }, 400);
+    }
+
+    const chain = getChainById(db, id);
+    if (!chain) {
+      return c.json({ error: "Chain not found" }, 404);
+    }
+
+    if (chain.hops.length !== 1) {
+      return c.json({ error: "Generate profile requires a single-hop chain." }, 400);
+    }
+
+    const hop = chain.hops[0]!;
+    const row =
+      db
+        .query<
+          {
+            operational_status: string;
+            panel_hostname: string;
+            xui_web_base_path: string | null;
+            xui_panel_port: number | null;
+            xui_secrets_ciphertext: Uint8Array | null;
+            xui_secrets_nonce: Uint8Array | null;
+          },
+          [number]
+        >(
+          `SELECT operational_status, panel_hostname, xui_web_base_path, xui_panel_port,
+                  xui_secrets_ciphertext, xui_secrets_nonce
+           FROM vpn_profiles WHERE id = ?`,
+        )
+        .get(hop.vpnProfileId) ?? null;
+
+    if (
+      !row ||
+      row.operational_status !== "working" ||
+      !row.xui_secrets_ciphertext ||
+      !row.xui_secrets_nonce
+    ) {
+      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+    }
+
+    let secrets;
+    try {
+      secrets = await decryptXuiSecretsJson(env.masterKey, row.xui_secrets_ciphertext, row.xui_secrets_nonce);
+    } catch {
+      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+    }
+
+    if (secrets.v !== 1) {
+      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+    }
+
+    const panelPort = row.xui_panel_port == null ? null : Number(row.xui_panel_port);
+    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path, panelPort);
+    if (!panelUrl) {
+      return c.json({ error: "Panel URL is not available for this profile." }, 409);
+    }
+
+    const material = await generateRealityClientMaterial();
+    const inboundBody = buildVlessRealityInboundBody({
+      port: 443,
+      remark: `chain-${id}-${Date.now()}`,
+      clientEmail: `vpnmgr-${material.clientUuid}@chain-${id}.local`,
+      clientUuid: material.clientUuid,
+      subId: material.subId,
+      shortId: material.shortId,
+      realityPrivateKeyB64: material.realityPrivateKeyB64,
+      realityPublicKeyB64: material.realityPublicKeyB64,
+    });
+
+    try {
+      const result = await provisionChainClientAccess({
+        panelBaseUrl: panelUrl,
+        adminUsername: secrets.adminUsername,
+        adminPassword: secrets.adminPassword,
+        inboundBody: inboundBody as unknown as Record<string, unknown>,
+        fetchFn: globalThis.fetch,
+      });
+      return c.json(result);
+    } catch (err) {
+      const details =
+        err instanceof PanelRequestError
+          ? err.panelMessage
+          : err instanceof Error
+            ? err.message
+            : "Unknown error";
+      return c.json({ error: "Panel request failed.", details }, 502);
     }
   });
 
