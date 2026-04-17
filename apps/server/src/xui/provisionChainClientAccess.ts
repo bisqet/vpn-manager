@@ -1,4 +1,12 @@
+import { inboundTagFromAddResponse, parseInboundIdFromAddJson } from "./panelInboundAddUtils";
+import { PanelRequestError } from "./panelRequestError";
+
 export type ChainClientAccessResult = { vlessShareLink: string; subscriptionUrl: string };
+
+export type ChainClientAccessProvisionResult = ChainClientAccessResult & {
+  inboundTag: string;
+  inboundId: number | null;
+};
 
 export type ProvisionChainClientAccessInput = {
   panelBaseUrl: string;
@@ -8,15 +16,7 @@ export type ProvisionChainClientAccessInput = {
   fetchFn?: typeof fetch;
 };
 
-export class PanelRequestError extends Error {
-  readonly panelMessage: string;
-
-  constructor(panelMessage: string) {
-    super(panelMessage);
-    this.name = "PanelRequestError";
-    this.panelMessage = panelMessage;
-  }
-}
+export { PanelRequestError };
 
 /** Trim and ensure a trailing slash for relative URL resolution. */
 export function panelBaseForProvision(panelBaseUrl: string): string {
@@ -376,7 +376,7 @@ export function resolveVlessShareLink(input: {
 
 export async function provisionChainClientAccess(
   input: ProvisionChainClientAccessInput,
-): Promise<ChainClientAccessResult> {
+): Promise<ChainClientAccessProvisionResult> {
   return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
     const fetchFn = input.fetchFn ?? fetch;
 
@@ -432,6 +432,9 @@ export async function provisionChainClientAccess(
       addJson,
     });
 
-    return { vlessShareLink, subscriptionUrl };
+    const inboundTag = inboundTagFromAddResponse(addJson, inboundBody);
+    const inboundId = parseInboundIdFromAddJson(addJson);
+
+    return { vlessShareLink, subscriptionUrl, inboundTag, inboundId };
   });
 }

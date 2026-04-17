@@ -442,6 +442,7 @@ describe("chainsRoutes", () => {
     const inboundAddObj = (inboundBody: Record<string, string | number | boolean>) => {
       const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
       return {
+        id: 99,
         port: inboundBody.port,
         protocol: "vless",
         tag: `inbound-${inboundBody.port}`,
@@ -516,9 +517,15 @@ describe("chainsRoutes", () => {
       });
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { vlessShareLink: string; subscriptionUrl: string };
+      const body = (await res.json()) as {
+        vlessShareLink: string;
+        subscriptionUrl: string;
+        createdInbounds: { inboundId: number | null }[];
+      };
       expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
+      expect(body.createdInbounds).toHaveLength(2);
+      expect(body.createdInbounds.every((c) => c.inboundId === 99)).toBe(true);
       expect(fetchMock.mock.calls.length).toBe(14);
     } finally {
       globalThis.fetch = originalFetch;
@@ -619,6 +626,7 @@ describe("chainsRoutes", () => {
         const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
         const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
         const addObj = {
+          id: 99,
           port: inboundBody.port,
           protocol: "vless",
           settings: JSON.stringify(settingsClients),
@@ -644,11 +652,17 @@ describe("chainsRoutes", () => {
       });
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { vlessShareLink: string; subscriptionUrl: string };
+      const body = (await res.json()) as {
+        vlessShareLink: string;
+        subscriptionUrl: string;
+        createdInbounds: { inboundId: number | null }[];
+      };
       expect(typeof body.vlessShareLink).toBe("string");
       expect(typeof body.subscriptionUrl).toBe("string");
       expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
+      expect(body.createdInbounds).toHaveLength(1);
+      expect(body.createdInbounds[0]!.inboundId).toBe(99);
       expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       globalThis.fetch = originalFetch;

@@ -10,8 +10,8 @@ import {
   restartPanelXrayService,
   updatePanelXraySetting,
 } from "./panelXrayClient";
+import { inboundTagFromAddResponse, parseInboundIdFromAddJson } from "./panelInboundAddUtils";
 import {
-  type ChainClientAccessResult,
   type PanelJson,
   PanelRequestError,
   buildSubscriptionUrl,
@@ -36,6 +36,18 @@ export type ProvisionMultihopChainClientAccessInput = {
   fetchFn?: typeof fetch;
 };
 
+export type CreatedInboundRef = {
+  panelBaseUrl: string;
+  adminUsername: string;
+  adminPassword: string;
+  inboundTag: string;
+  inboundId: number | null;
+};
+
+export type MultihopProvisionResult = import("./provisionChainClientAccess").ChainClientAccessResult & {
+  createdInbounds: CreatedInboundRef[];
+};
+
 type CreatedInboundEdge = {
   port: number;
   inboundTag: string;
@@ -43,21 +55,6 @@ type CreatedInboundEdge = {
   realityPublicKeyB64: string;
   shortId: string;
 };
-
-function inboundTagFromAddResponse(addJson: PanelJson, inboundBody: Record<string, unknown>): string {
-  const obj = addJson.obj;
-  if (obj && typeof obj === "object") {
-    const tag = (obj as Record<string, unknown>).tag;
-    if (typeof tag === "string" && tag.trim() !== "") return tag;
-  }
-  const portRaw = inboundBody.port;
-  const port =
-    typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number(portRaw) : NaN;
-  if (Number.isFinite(port) && port > 0) {
-    return `inbound-${port}`;
-  }
-  throw new PanelRequestError("unable to determine inbound tag from panel response");
-}
 
 async function addInbound(input: {
   base: string;
@@ -106,7 +103,7 @@ function parseSubIdFromInboundBody(inboundBody: Record<string, unknown>): string
 
 export async function provisionMultihopChainClientAccess(
   input: ProvisionMultihopChainClientAccessInput,
-): Promise<ChainClientAccessResult> {
+): Promise<MultihopProvisionResult> {
   const hops = input.hops;
   const fetchFn = input.fetchFn ?? fetch;
   if (hops.length === 0) {
@@ -125,18 +122,32 @@ export async function provisionMultihopChainClientAccess(
       realityPrivateKeyB64: material.realityPrivateKeyB64,
       realityPublicKeyB64: material.realityPublicKeyB64,
     });
-    return provisionChainClientAccess({
+    const r = await provisionChainClientAccess({
       panelBaseUrl: h.panelBaseUrl,
       adminUsername: h.adminUsername,
       adminPassword: h.adminPassword,
       inboundBody: inboundBody as unknown as Record<string, unknown>,
       fetchFn,
     });
+    return {
+      vlessShareLink: r.vlessShareLink,
+      subscriptionUrl: r.subscriptionUrl,
+      createdInbounds: [
+        {
+          panelBaseUrl: h.panelBaseUrl,
+          adminUsername: h.adminUsername,
+          adminPassword: h.adminPassword,
+          inboundTag: r.inboundTag,
+          inboundId: r.inboundId,
+        },
+      ],
+    };
   }
 
   const runId = `${Date.now()}`;
   const edgeByDownstreamIndex = new Map<number, CreatedInboundEdge>();
   const receivedInboundTagByHopIndex = new Map<number, string>();
+  const createdInbounds: CreatedInboundRef[] = [];
 
   for (let k = hops.length - 1; k >= 1; k--) {
     const hop = hops[k]!;
@@ -163,6 +174,13 @@ export async function provisionMultihopChainClientAccess(
 
     const addJson = await addInbound({ base, cookieHeader, inboundBody, fetchFn });
     const inboundTag = inboundTagFromAddResponse(addJson, inboundBody);
+    createdInbounds.push({
+      panelBaseUrl: hop.panelBaseUrl,
+      adminUsername: hop.adminUsername,
+      adminPassword: hop.adminPassword,
+      inboundTag,
+      inboundId: parseInboundIdFromAddJson(addJson),
+    });
     const portRaw = inboundBody.port;
     const port =
       typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number(portRaw) : NaN;
@@ -213,6 +231,13 @@ export async function provisionMultihopChainClientAccess(
   });
   const userInboundTag = inboundTagFromAddResponse(userAddJson, userInboundBody);
   receivedInboundTagByHopIndex.set(0, userInboundTag);
+  createdInbounds.push({
+    panelBaseUrl: entry.panelBaseUrl,
+    adminUsername: entry.adminUsername,
+    adminPassword: entry.adminPassword,
+    inboundTag: userInboundTag,
+    inboundId: parseInboundIdFromAddJson(userAddJson),
+  });
 
   const subId = parseSubIdFromInboundBody(userInboundBody);
   const subscriptionUrl = buildSubscriptionUrl(entrySession.base, subId);
@@ -305,5 +330,5 @@ export async function provisionMultihopChainClientAccess(
     fetchFn,
   });
 
-  return { vlessShareLink, subscriptionUrl };
+  return { vlessShareLink, subscriptionUrl, createdInbounds };
 }

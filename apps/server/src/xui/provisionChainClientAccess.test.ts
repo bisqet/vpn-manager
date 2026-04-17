@@ -106,6 +106,7 @@ describe("provisionChainClientAccess", () => {
         expect(isCandidateListenPort(chosen)).toBe(true);
 
         const addObj = {
+          id: 42_001,
           port: chosen,
           protocol: "vless",
           settings: JSON.stringify(settingsClients),
@@ -138,6 +139,8 @@ describe("provisionChainClientAccess", () => {
     expect(out.subscriptionUrl).toContain("a1b2c3d4e5f6789a");
     expect(out.subscriptionUrl).toContain("/sub/");
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
+    expect(out.inboundTag).toMatch(/^inbound-\d+$/);
+    expect(out.inboundId).toBe(42_001);
   });
 
   test("throws PanelRequestError when inbound add reports success false", async () => {
@@ -263,6 +266,8 @@ describe("provisionChainClientAccess", () => {
     expect(seenUrls[3]).toBe("http://panel.downgrade/prefix/panel/api/inbounds/add");
     expect(out.subscriptionUrl.startsWith("http://")).toBe(true);
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
+    expect(out.inboundTag).toMatch(/^inbound-\d+$/);
+    expect(out.inboundId).toBeNull();
   });
 
   test("when VPN_MANAGER_PANEL_TLS_INSECURE is set but https succeeds, does not call http://", async () => {
@@ -336,5 +341,7 @@ describe("provisionChainClientAccess", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(seenUrls.every((u) => u.startsWith("https://"))).toBe(true);
     expect(out.subscriptionUrl.startsWith("https://")).toBe(true);
+    expect(out.inboundTag).toMatch(/^inbound-\d+$/);
+    expect(out.inboundId).toBeNull();
   });
 });

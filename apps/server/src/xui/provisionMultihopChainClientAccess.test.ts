@@ -14,7 +14,7 @@ describe("provisionMultihopChainClientAccess", () => {
     const inboundForAddResponse = (tag: string, port: number, settings: string, streamSettings: string) => ({
       success: true,
       msg: "ok",
-      obj: { tag, port, protocol: "vless", settings, streamSettings },
+      obj: { id: 9000 + port, tag, port, protocol: "vless", settings, streamSettings },
     });
 
     const xrayBundleObj = {
@@ -122,6 +122,13 @@ describe("provisionMultihopChainClientAccess", () => {
 
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
     expect(out.subscriptionUrl).toContain("/sub/");
+    expect(out.createdInbounds).toHaveLength(2);
+    expect(out.createdInbounds[0]!.panelBaseUrl).toBe(hop1Base);
+    expect(out.createdInbounds[0]!.inboundTag.startsWith("inbound-")).toBe(true);
+    expect(out.createdInbounds[0]!.inboundId).toBe(9000 + Number(out.createdInbounds[0]!.inboundTag.replace(/^inbound-/, "")));
+    expect(out.createdInbounds[1]!.panelBaseUrl).toBe(hop0Base);
+    expect(out.createdInbounds[1]!.inboundTag.startsWith("inbound-")).toBe(true);
+    expect(out.createdInbounds[1]!.inboundId).toBe(9000 + Number(out.createdInbounds[1]!.inboundTag.replace(/^inbound-/, "")));
     // hop1 login+list+add, hop0 login+list+add, hop0 login+xray+update+restart, hop1 login+xray+update+restart
     expect(fetchMock.mock.calls.length).toBe(14);
   });
@@ -154,6 +161,7 @@ describe("provisionMultihopChainClientAccess", () => {
       if (url.endsWith("/panel/api/inbounds/add")) {
         const sent = JSON.parse(init?.body as string) as { port: number; settings: string; streamSettings: string };
         const addObj = {
+          id: 99,
           port: sent.port,
           protocol: "vless",
           settings: JSON.stringify(settingsClients),
@@ -180,6 +188,14 @@ describe("provisionMultihopChainClientAccess", () => {
     });
 
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
+    expect(out.createdInbounds).toHaveLength(1);
+    expect(out.createdInbounds[0]).toMatchObject({
+      panelBaseUrl: "https://panel.test/",
+      adminUsername: "admin",
+      adminPassword: "secret",
+      inboundId: 99,
+    });
+    expect(out.createdInbounds[0]!.inboundTag).toMatch(/^inbound-\d+$/);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
