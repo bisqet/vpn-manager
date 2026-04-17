@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { SESSION_COOKIE } from "../auth/cookie";
+import { encryptVpnPassword } from "../crypto/vpnSecret";
 import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import { putTestAppSettings } from "../db/appSettings";
 import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
+import type { SshExecArgs, SshExecFn } from "../vpn/sshExec";
 
 type RoutingProfileRow = {
   id: number;
@@ -54,6 +57,18 @@ describe("chainsRoutes", () => {
       Date.now() + 60_000,
     );
   });
+
+  async function seedEncryptedSshPassword(
+    dbConn: Database,
+    masterKey: Uint8Array,
+    profileId: number,
+    plaintext = "vpnmgr-test-ssh",
+  ) {
+    const { ciphertext, nonce } = await encryptVpnPassword(masterKey, plaintext);
+    dbConn
+      .query("UPDATE vpn_profiles SET ssh_password_ciphertext = ?, ssh_password_nonce = ? WHERE id = ?")
+      .run(ciphertext, nonce, profileId);
+  }
 
   async function seedWorkingVpnProfile(dbConn: Database, masterKey: Uint8Array, profileId: number) {
     const { ciphertext, nonce } = await encryptXuiSecretsJson(masterKey, {
@@ -403,6 +418,7 @@ describe("chainsRoutes", () => {
   });
 
   test("generate-profile returns 200 for two-hop chain when panel succeeds", async () => {
+    putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: false, sshKnownHostsFile: null });
     const originalFetch = globalThis.fetch;
     const app = createApp(db, env);
     const firstProfileId = seedVpnProfile("Alpha");
@@ -517,15 +533,11 @@ describe("chainsRoutes", () => {
       });
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        vlessShareLink: string;
-        subscriptionUrl: string;
-        createdInbounds: { inboundId: number | null }[];
-      };
-      expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(typeof body.vlessShareLink).toBe("string");
+      expect((body.vlessShareLink as string).startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
-      expect(body.createdInbounds).toHaveLength(2);
-      expect(body.createdInbounds.every((c) => c.inboundId === 99)).toBe(true);
+      expect(body).not.toHaveProperty("createdInbounds");
       expect(fetchMock.mock.calls.length).toBe(14);
     } finally {
       globalThis.fetch = originalFetch;
@@ -577,6 +589,7 @@ describe("chainsRoutes", () => {
   });
 
   test("generate-profile returns 200 with share and subscription URLs when panel succeeds", async () => {
+    putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: false, sshKnownHostsFile: null });
     const originalFetch = globalThis.fetch;
     const app = createApp(db, env);
     const profileId = seedVpnProfile("Solo");
@@ -652,18 +665,365 @@ describe("chainsRoutes", () => {
       });
 
       expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        vlessShareLink: string;
-        subscriptionUrl: string;
-        createdInbounds: { inboundId: number | null }[];
-      };
+      const body = (await res.json()) as Record<string, unknown>;
       expect(typeof body.vlessShareLink).toBe("string");
       expect(typeof body.subscriptionUrl).toBe("string");
-      expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
+      expect((body.vlessShareLink as string).startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
-      expect(body.createdInbounds).toHaveLength(1);
-      expect(body.createdInbounds[0]!.inboundId).toBe(99);
+      expect(body).not.toHaveProperty("createdInbounds");
       expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("generate-profile omits createdInbounds while vpn_ssh_enabled is false (default)", async () => {
+    putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: false, sshKnownHostsFile: null });
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+    await seedWorkingVpnProfile(db, env.masterKey, profileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/add")) {
+        const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
+        const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
+        const addObj = {
+          id: 99,
+          port: inboundBody.port,
+          protocol: "vless",
+          settings: JSON.stringify(settingsClients),
+          streamSettings: inboundBody.streamSettings,
+        };
+
+        return new Response(JSON.stringify({ success: true, msg: "created", obj: addObj }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("createdInbounds");
+      expect(typeof body.vlessShareLink).toBe("string");
+      expect(typeof body.subscriptionUrl).toBe("string");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("generate-profile runs ssh UFW sync once per unique VPN profile when vpn_ssh_enabled", async () => {
+    putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: true, sshKnownHostsFile: null });
+
+    const sshCalls: SshExecArgs[] = [];
+    const sshExec: SshExecFn = async (args) => {
+      sshCalls.push(args);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env, { chains: { sshExec } });
+    const firstProfileId = seedVpnProfile("Alpha");
+    const secondProfileId = seedVpnProfile("Beta");
+    await seedEncryptedSshPassword(db, env.masterKey, firstProfileId);
+    await seedEncryptedSshPassword(db, env.masterKey, secondProfileId);
+    await seedWorkingVpnProfile(db, env.masterKey, firstProfileId);
+    await seedWorkingVpnProfile(db, env.masterKey, secondProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("entry.example.com", firstProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("relay.example.com", secondProfileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Two hops",
+        vpnProfileIds: [firstProfileId, secondProfileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const xrayBundleObj = {
+      xraySetting: {
+        log: {},
+        inbounds: [],
+        outbounds: [
+          { tag: "direct", protocol: "freedom", settings: {} },
+          { tag: "blocked", protocol: "blackhole", settings: {} },
+        ],
+        routing: { domainStrategy: "AsIs", rules: [] },
+      },
+      inboundTags: [],
+      outboundTestUrl: "https://www.google.com/generate_204",
+    };
+
+    const inboundAddObj = (inboundBody: Record<string, string | number | boolean>) => {
+      const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
+      return {
+        id: 99,
+        port: inboundBody.port,
+        protocol: "vless",
+        tag: `inbound-${inboundBody.port}`,
+        settings: JSON.stringify(settingsClients),
+        streamSettings: inboundBody.streamSettings,
+      };
+    };
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/add")) {
+        const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
+        return new Response(
+          JSON.stringify({ success: true, msg: "created", obj: inboundAddObj(inboundBody) }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/panel/xray/")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            msg: "ok",
+            obj: JSON.stringify(xrayBundleObj),
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/panel/xray/update")) {
+        return new Response(JSON.stringify({ success: true, msg: "saved" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/server/restartXrayService")) {
+        return new Response(JSON.stringify({ success: true, msg: "restarted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("createdInbounds");
+      expect(sshCalls.length).toBe(2);
+      expect(sshCalls.map((c) => c.host).sort()).toEqual(["alpha.example.com", "beta.example.com"].sort());
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("generate-profile returns 502 and compensates inbounds when UFW ssh sync fails", async () => {
+    putTestAppSettings(db, { acmeEmail: "", vpnSshEnabled: true, sshKnownHostsFile: null });
+
+    const sshExec: SshExecFn = async () => ({ code: 1, stdout: "", stderr: "x" });
+
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env, { chains: { sshExec } });
+    const firstProfileId = seedVpnProfile("Alpha");
+    const secondProfileId = seedVpnProfile("Beta");
+    await seedEncryptedSshPassword(db, env.masterKey, firstProfileId);
+    await seedEncryptedSshPassword(db, env.masterKey, secondProfileId);
+    await seedWorkingVpnProfile(db, env.masterKey, firstProfileId);
+    await seedWorkingVpnProfile(db, env.masterKey, secondProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("entry.example.com", firstProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("relay.example.com", secondProfileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Two hops",
+        vpnProfileIds: [firstProfileId, secondProfileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const xrayBundleObj = {
+      xraySetting: {
+        log: {},
+        inbounds: [],
+        outbounds: [
+          { tag: "direct", protocol: "freedom", settings: {} },
+          { tag: "blocked", protocol: "blackhole", settings: {} },
+        ],
+        routing: { domainStrategy: "AsIs", rules: [] },
+      },
+      inboundTags: [],
+      outboundTestUrl: "https://www.google.com/generate_204",
+    };
+
+    const inboundAddObj = (inboundBody: Record<string, string | number | boolean>) => {
+      const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
+      return {
+        id: 99,
+        port: inboundBody.port,
+        protocol: "vless",
+        tag: `inbound-${inboundBody.port}`,
+        settings: JSON.stringify(settingsClients),
+        streamSettings: inboundBody.streamSettings,
+      };
+    };
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/add")) {
+        const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
+        return new Response(
+          JSON.stringify({ success: true, msg: "created", obj: inboundAddObj(inboundBody) }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.includes("/panel/api/inbounds/del/")) {
+        return new Response(JSON.stringify({ success: true, msg: "deleted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/xray/")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            msg: "ok",
+            obj: JSON.stringify(xrayBundleObj),
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/panel/xray/update")) {
+        return new Response(JSON.stringify({ success: true, msg: "saved" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/server/restartXrayService")) {
+        return new Response(JSON.stringify({ success: true, msg: "restarted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "Firewall sync failed." });
+
+      const delUrls = fetchMock.mock.calls
+        .map(([input]) => (typeof input === "string" ? input : input instanceof URL ? input.href : input.url))
+        .filter((u) => u.includes("/panel/api/inbounds/del/"));
+      expect(delUrls.length).toBeGreaterThanOrEqual(2);
     } finally {
       globalThis.fetch = originalFetch;
     }

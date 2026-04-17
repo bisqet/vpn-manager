@@ -1,15 +1,19 @@
 import type { Database } from "bun:sqlite";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { decryptVpnPassword } from "../crypto/vpnSecret";
 import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
-import type { Env } from "../env";
+import { getAppSettings } from "../db/appSettings";
 import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
+import { buildSshExecUsingSpawn } from "../vpn/sshExec";
+import { compensateCreatedInbounds } from "../xui/compensateChainProvision";
 import { dialHostForVpnProfile } from "../xui/dialHostForVpnProfile";
 import {
   type HopPanelContext,
   provisionMultihopChainClientAccess,
 } from "../xui/provisionMultihopChainClientAccess";
+import { runXuiUfwSyncWithRetries } from "../xui/runXuiUfwSync";
 
 type ChainListRow = {
   chain_id: number;
@@ -289,8 +293,12 @@ function insertRoutingProfilesForHops(db: Database, chainId: number, chainName: 
   }
 }
 
-export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
+export function chainsRoutes(
+  db: Database,
+  env: { masterKey: Uint8Array; sshExec?: import("../vpn/sshExec").SshExecFn },
+) {
   const app = new Hono();
+  const sshExec = env.sshExec ?? buildSshExecUsingSpawn();
 
   app.get("/", (c) => {
     return c.json(listChains(db));
@@ -370,6 +378,16 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
     }
 
     const hops: HopPanelContext[] = [];
+    const profileSshById = new Map<
+      number,
+      {
+        host: string;
+        ssh_port: number;
+        ssh_user: string;
+        ssh_password_ciphertext: Uint8Array | null;
+        ssh_password_nonce: Uint8Array | null;
+      }
+    >();
 
     for (const hop of chain.hops) {
       const row =
@@ -383,11 +401,16 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
               xui_panel_port: number | null;
               xui_secrets_ciphertext: Uint8Array | null;
               xui_secrets_nonce: Uint8Array | null;
+              ssh_port: number;
+              ssh_user: string;
+              ssh_password_ciphertext: Uint8Array | null;
+              ssh_password_nonce: Uint8Array | null;
             },
             [number]
           >(
             `SELECT operational_status, host, panel_hostname, xui_web_base_path, xui_panel_port,
-                    xui_secrets_ciphertext, xui_secrets_nonce
+                    xui_secrets_ciphertext, xui_secrets_nonce,
+                    ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce
              FROM vpn_profiles WHERE id = ?`,
           )
           .get(hop.vpnProfileId) ?? null;
@@ -427,6 +450,16 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
           host: row.host,
         }),
       });
+
+      if (!profileSshById.has(hop.vpnProfileId)) {
+        profileSshById.set(hop.vpnProfileId, {
+          host: row.host,
+          ssh_port: Number(row.ssh_port),
+          ssh_user: row.ssh_user,
+          ssh_password_ciphertext: row.ssh_password_ciphertext,
+          ssh_password_nonce: row.ssh_password_nonce,
+        });
+      }
     }
 
     try {
@@ -435,7 +468,56 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
         hops,
         fetchFn: globalThis.fetch,
       });
-      return c.json(result);
+
+      const appSettings = getAppSettings(db);
+      const responsePayload = {
+        vlessShareLink: result.vlessShareLink,
+        subscriptionUrl: result.subscriptionUrl,
+      };
+
+      if (!appSettings.vpnSshEnabled) {
+        return c.json(responsePayload);
+      }
+
+      const orderedProfileIds: number[] = [];
+      const seenProfileIds = new Set<number>();
+      for (const hop of chain.hops) {
+        if (!seenProfileIds.has(hop.vpnProfileId)) {
+          seenProfileIds.add(hop.vpnProfileId);
+          orderedProfileIds.push(hop.vpnProfileId);
+        }
+      }
+
+      try {
+        for (const profileId of orderedProfileIds) {
+          const sshRow = profileSshById.get(profileId);
+          if (!sshRow?.ssh_password_ciphertext || !sshRow.ssh_password_nonce) {
+            throw new Error("VPN profile SSH password is not available.");
+          }
+          const password = await decryptVpnPassword(
+            env.masterKey,
+            sshRow.ssh_password_ciphertext,
+            sshRow.ssh_password_nonce,
+          );
+          await runXuiUfwSyncWithRetries({
+            host: sshRow.host,
+            port: sshRow.ssh_port,
+            user: sshRow.ssh_user,
+            password,
+            knownHostsFile: appSettings.sshKnownHostsFile,
+            sshExec,
+            timeoutMs: 60_000,
+          });
+        }
+      } catch {
+        await compensateCreatedInbounds({
+          createdInbounds: result.createdInbounds,
+          fetchFn: globalThis.fetch,
+        });
+        return c.json({ error: "Firewall sync failed." }, 502);
+      }
+
+      return c.json(responsePayload);
     } catch {
       // Do not forward panel or transport exception text to the client (avoid leaking internals).
       return c.json({ error: "Panel request failed." }, 502);

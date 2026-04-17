@@ -14,12 +14,13 @@ import { importRoutes } from "./routes/import";
 import { profilesRoutes, type ProfilesRoutesOptions } from "./routes/profiles";
 import { routingRoutes } from "./routes/routing";
 import { settingsRoutes } from "./routes/settings";
+import type { SshExecFn } from "./vpn/sshExec";
 
 // Dev note: set VPN_MANAGER_MASTER_KEY to the base64 of 32 random bytes before starting the server.
 export function createApp(
   db: Database,
   env: Pick<Env, "masterKey" | "staticDir">,
-  options?: { profiles?: ProfilesRoutesOptions },
+  options?: { profiles?: ProfilesRoutesOptions; chains?: { sshExec?: SshExecFn } },
 ) {
   const app = new Hono();
 
@@ -40,7 +41,10 @@ export function createApp(
 
   const authed = new Hono();
   authed.use("*", requireAuth(db));
-  authed.route("/chains", chainsRoutes(db, { masterKey: env.masterKey }));
+  authed.route(
+    "/chains",
+    chainsRoutes(db, { masterKey: env.masterKey, sshExec: options?.chains?.sshExec }),
+  );
   authed.route("/routing", routingRoutes(db));
   authed.route("/import", importRoutes(db, env));
   authed.route("/settings", settingsRoutes(db));
