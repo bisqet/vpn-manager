@@ -20,19 +20,20 @@ export class PanelRequestError extends Error {
   }
 }
 
-/** When set, HTTPS calls to the 3x-ui panel skip TLS certificate verification (self-signed / private CA). */
-function panelOutboundTls(): { tls?: { rejectUnauthorized: boolean } } {
-  const v = process.env.VPN_MANAGER_PANEL_TLS_INSECURE?.trim().toLowerCase();
-  if (v === "1" || v === "true" || v === "yes") {
-    return { tls: { rejectUnauthorized: false } };
-  }
-  return {};
-}
-
 function normalizePanelBaseUrl(panelBaseUrl: string): string {
   const trimmed = panelBaseUrl.trim();
   if (trimmed === "") return "/";
   return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+}
+
+/** When `VPN_MANAGER_PANEL_TLS_INSECURE` is true/1/yes, use `http://` instead of `https://` for panel API calls. */
+function panelBaseForProvision(panelBaseUrl: string): string {
+  const normalized = normalizePanelBaseUrl(panelBaseUrl);
+  const v = process.env.VPN_MANAGER_PANEL_TLS_INSECURE?.trim().toLowerCase();
+  if ((v === "1" || v === "true" || v === "yes") && normalized.startsWith("https://")) {
+    return `http://${normalized.slice("https://".length)}`;
+  }
+  return normalized;
 }
 
 /**
@@ -308,7 +309,7 @@ function resolveVlessShareLink(input: {
 export async function provisionChainClientAccess(
   input: ProvisionChainClientAccessInput,
 ): Promise<ChainClientAccessResult> {
-  const base = normalizePanelBaseUrl(input.panelBaseUrl);
+  const base = panelBaseForProvision(input.panelBaseUrl);
   const fetchFn = input.fetchFn ?? fetch;
 
   let panelHost = "";
@@ -325,7 +326,7 @@ export async function provisionChainClientAccess(
     data: {
       panelHost,
       baseLen: base.length,
-      tlsInsecure: Boolean(panelOutboundTls().tls),
+      panelHttpDowngrade: input.panelBaseUrl.trim().startsWith("https://") && base.startsWith("http://"),
     },
   });
   // #endregion
@@ -346,7 +347,6 @@ export async function provisionChainClientAccess(
         accept: "application/json",
       },
       body: loginBody.toString(),
-      ...panelOutboundTls(),
     });
   } catch (e) {
     // #region agent log
@@ -404,7 +404,6 @@ export async function provisionChainClientAccess(
         cookie: cookieHeader,
       },
       body: JSON.stringify(input.inboundBody),
-      ...panelOutboundTls(),
     });
   } catch (e) {
     // #region agent log

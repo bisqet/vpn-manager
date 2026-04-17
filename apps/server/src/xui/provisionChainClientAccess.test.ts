@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { buildVlessRealityInboundBody } from "./buildVlessRealityInboundBody";
 import {
   PanelRequestError,
@@ -18,6 +18,10 @@ describe("buildSubscriptionUrl", () => {
 });
 
 describe("provisionChainClientAccess", () => {
+  beforeEach(() => {
+    delete process.env.VPN_MANAGER_PANEL_TLS_INSECURE;
+  });
+
   test("logs in with form POST, adds inbound with session cookie, returns subscription URL and vless link", async () => {
     const inboundBody = buildVlessRealityInboundBody({
       port: 4433,
@@ -135,5 +139,70 @@ describe("provisionChainClientAccess", () => {
       expect(err).toBeInstanceOf(PanelRequestError);
       expect((err as PanelRequestError).panelMessage).toBe("duplicate port");
     }
+  });
+
+  test("uses http:// for panel when VPN_MANAGER_PANEL_TLS_INSECURE is set", async () => {
+    process.env.VPN_MANAGER_PANEL_TLS_INSECURE = "true";
+
+    const inboundBody = buildVlessRealityInboundBody({
+      port: 4433,
+      remark: "chain",
+      clientEmail: "c@example.com",
+      clientUuid: "11111111-1111-4111-8111-111111111111",
+      subId: "a1b2c3d4e5f6789a",
+      shortId: "01234567",
+      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64"),
+      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
+    });
+
+    const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
+    const addObj = {
+      port: 4433,
+      protocol: "vless",
+      settings: JSON.stringify(settingsClients),
+      streamSettings: inboundBody.streamSettings,
+    };
+
+    const seenUrls: string[] = [];
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      seenUrls.push(url);
+
+      if (url === "http://panel.downgrade/prefix/login") {
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url === "http://panel.downgrade/prefix/panel/api/inbounds/add") {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            msg: "created",
+            obj: addObj,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const out = await provisionChainClientAccess({
+      panelBaseUrl: "https://panel.downgrade/prefix/",
+      adminUsername: "admin",
+      adminPassword: "secret",
+      inboundBody,
+      fetchFn: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(seenUrls[0]).toBe("http://panel.downgrade/prefix/login");
+    expect(seenUrls[1]).toBe("http://panel.downgrade/prefix/panel/api/inbounds/add");
+    expect(out.subscriptionUrl.startsWith("http://")).toBe(true);
+    expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
   });
 });
