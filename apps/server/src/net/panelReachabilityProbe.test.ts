@@ -17,11 +17,11 @@ describe("httpStatusMeansReachable", () => {
 describe("buildPanelProbeUrl", () => {
   test("uses root HTTPS URL when path and port are absent", () => {
     const url = buildPanelProbeUrl({
-      panel_hostname: "203.0.113.1",
+      panel_hostname: "panel.probe.example.com",
       xui_web_base_path: null,
       xui_panel_port: null,
     });
-    expect(url).toBe("https://203.0.113.1/");
+    expect(url).toBe("https://panel.probe.example.com/");
   });
 });
 
@@ -40,7 +40,7 @@ describe("runPanelReachabilityProbe", () => {
         updated_at TEXT DEFAULT (datetime('now'))
       );
     `);
-    db.query(`INSERT INTO vpn_profiles (id, panel_hostname) VALUES (1, '203.0.113.1')`).run();
+    db.query(`INSERT INTO vpn_profiles (id, panel_hostname) VALUES (1, 'panel.probe.example.com')`).run();
 
     const fetchFn = async () => new Response(null, { status: 401 });
 

@@ -27,7 +27,7 @@ describe("runLiveSetupPhases", () => {
         ssh_password_ciphertext, ssh_password_nonce,
         operational_status, panel_hostname
       ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
-    ).run("t", "1.2.3.4", 22, "root", ciphertext, nonce, "panel.example.com");
+    ).run("t", "ssh.live.example.com", 22, "root", ciphertext, nonce, "panel.example.com");
 
     profileId = Number(db.query<{ id: number }, []>("SELECT id FROM vpn_profiles LIMIT 1").get()!.id);
   });
@@ -37,7 +37,7 @@ describe("runLiveSetupPhases", () => {
       db,
       env,
       profileId,
-      row: { host: "1.2.3.4", ssh_port: 22, ssh_user: "root" },
+      row: { host: "ssh.live.example.com", ssh_port: 22, ssh_user: "root" },
       phases: [{ id: "only", title: "Only", script: "true" }],
       adminUsername: "admuser12",
       adminPassword: "admpass24charslongxx",
@@ -97,7 +97,7 @@ describe("runLiveSetupPhases", () => {
       db,
       env,
       profileId,
-      row: { host: "1.2.3.4", ssh_port: 22, ssh_user: "root" },
+      row: { host: "ssh.live.example.com", ssh_port: 22, ssh_user: "root" },
       phases: [{ id: "a", title: "T", script: "true" }],
       adminUsername: "u",
       adminPassword: "p",

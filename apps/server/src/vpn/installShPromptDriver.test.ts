@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SYNTH_PUBLIC_V6_MENU } from "../testLiterals";
 import { createInstallShPromptRules, runPromptDriver, type PromptRule } from "./installShPromptDriver";
 import { createPtyPlaintextBuffer } from "./ptyPlaintext";
 
@@ -17,7 +18,7 @@ describe("createInstallShPromptRules", () => {
     const sslFqdn = fqdn.find((r) => r.id === "ssl-menu-ip-vs-domain");
     expect(sslFqdn?.send).toBe("1");
 
-    const ip = createInstallShPromptRules({ panelHostname: "203.0.113.10", isPanelIp: true });
+    const ip = createInstallShPromptRules({ panelHostname: SYNTH_PUBLIC_V6_MENU, isPanelIp: true });
     const sslIp = ip.find((r) => r.id === "ssl-menu-ip-vs-domain");
     expect(sslIp?.send).toBe("2");
   });
@@ -221,7 +222,7 @@ describe("runPromptDriver", () => {
         cb(encoder.encode("Choose an option (default 2 for IP): "));
         return () => {};
       },
-      rules: createInstallShPromptRules({ panelHostname: "1.2.3.4", isPanelIp: true }),
+      rules: createInstallShPromptRules({ panelHostname: SYNTH_PUBLIC_V6_MENU, isPanelIp: true }),
       plaintext: createPtyPlaintextBuffer(),
       globalTimeoutMs: 25,
       signal: new AbortController().signal,

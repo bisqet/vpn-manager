@@ -45,7 +45,7 @@ describe("parseImportDocument", () => {
       vpns: [
         {
           label: "edge",
-          host: "203.0.113.10",
+          host: "vpn.import.example.com",
           sshPort: 2200,
           sshUser: "deploy",
           panelHostname: "panel.example.com",

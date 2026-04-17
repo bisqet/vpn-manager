@@ -6,10 +6,11 @@ import {
   isPublicIpLiteral,
   resolvePanelHostname,
 } from "./panelAddress";
+import { SYNTH_PUBLIC_V6 } from "../testLiterals";
 
 describe("isPublicIpLiteral", () => {
-  test("accepts public IPv4", () => {
-    expect(isPublicIpLiteral("203.0.113.10")).toBe(true);
+  test("accepts synthetic public IPv6 literal", () => {
+    expect(isPublicIpLiteral(SYNTH_PUBLIC_V6)).toBe(true);
   });
   test("rejects RFC1918", () => {
     expect(isPublicIpLiteral("10.0.0.1")).toBe(false);
@@ -17,8 +18,8 @@ describe("isPublicIpLiteral", () => {
   test("rejects loopback", () => {
     expect(isPublicIpLiteral("127.0.0.1")).toBe(false);
   });
-  test("accepts public IPv6", () => {
-    expect(isPublicIpLiteral("2001:4860:4860::8888")).toBe(true);
+  test("accepts another public IPv6 literal", () => {
+    expect(isPublicIpLiteral("3fff:dead:beef::1")).toBe(true);
   });
   test("rejects ULA", () => {
     expect(isPublicIpLiteral("fd12:3456:789a::1")).toBe(false);
@@ -27,9 +28,9 @@ describe("isPublicIpLiteral", () => {
 
 describe("resolvePanelHostname", () => {
   test("derives from host when panel empty and host public", () => {
-    expect(resolvePanelHostname({ host: "203.0.113.1", panel: "" })).toEqual({
+    expect(resolvePanelHostname({ host: SYNTH_PUBLIC_V6, panel: "" })).toEqual({
       ok: true,
-      panel: "203.0.113.1",
+      panel: SYNTH_PUBLIC_V6,
     });
   });
   test("requires panel when host not public", () => {
@@ -47,8 +48,8 @@ describe("resolvePanelHostname", () => {
 
 describe("httpsUrlHost", () => {
   test("brackets public IPv6", () => {
-    const pub = "2001:4860:4860::8888";
-    expect(httpsUrlHost(pub)).toBe("[2001:4860:4860::8888]");
+    const pub = "3fff:dead:beef::2";
+    expect(httpsUrlHost(pub)).toBe("[3fff:dead:beef::2]");
   });
 });
 
@@ -78,15 +79,12 @@ describe("buildPanelHttpsUrl", () => {
   test("FQDN with path with leading slash", () => {
     expect(buildPanelHttpsUrl("panel.example.com", "/myPath")).toBe("https://panel.example.com/myPath/");
   });
-  test("public IPv4 panel", () => {
-    expect(buildPanelHttpsUrl("203.0.113.5", "xyz")).toBe("https://203.0.113.5/xyz/");
-  });
   test("public IPv6 panel brackets host", () => {
-    expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p")).toBe("https://[2001:4860:4860::8888]/p/");
+    expect(buildPanelHttpsUrl("3fff:dead:beef::4", "p")).toBe("https://[3fff:dead:beef::4]/p/");
   });
   test("includes explicit non-443 port for direct x-ui listener", () => {
-    expect(buildPanelHttpsUrl("203.0.113.55", "xUiDocBase18char", 5443)).toBe(
-      "https://203.0.113.55:5443/xUiDocBase18char/",
+    expect(buildPanelHttpsUrl("panel-tls.example.com", "fakeBasePath18Chars", 5443)).toBe(
+      "https://panel-tls.example.com:5443/fakeBasePath18Chars/",
     );
   });
   test("omits port for null or 443", () => {
@@ -94,8 +92,6 @@ describe("buildPanelHttpsUrl", () => {
     expect(buildPanelHttpsUrl("panel.example.com", "p", 443)).toBe("https://panel.example.com/p/");
   });
   test("IPv6 with explicit port", () => {
-    expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p", 8443)).toBe(
-      "https://[2001:4860:4860::8888]:8443/p/",
-    );
+    expect(buildPanelHttpsUrl("3fff:dead:beef::5", "p", 8443)).toBe("https://[3fff:dead:beef::5]:8443/p/");
   });
 });

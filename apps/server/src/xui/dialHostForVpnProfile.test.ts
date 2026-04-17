@@ -6,7 +6,7 @@ describe("dialHostForVpnProfile", () => {
     expect(
       dialHostForVpnProfile({
         panel_hostname: "  panel.example.com  ",
-        host: "192.0.2.1",
+        host: "hop.fallback.example.com",
       }),
     ).toBe("panel.example.com");
   });
@@ -15,9 +15,9 @@ describe("dialHostForVpnProfile", () => {
     expect(
       dialHostForVpnProfile({
         panel_hostname: "",
-        host: "  192.0.2.2  ",
+        host: "  hop.trim.example.com  ",
       }),
-    ).toBe("192.0.2.2");
+    ).toBe("hop.trim.example.com");
   });
 
   test("whitespace-only panel_hostname falls back to host", () => {

@@ -9,6 +9,12 @@ import type { Env } from "../env";
 import { createApp } from "../index";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
 import { runPanelReachabilityProbe } from "../net/panelReachabilityProbe";
+import {
+  SYNTH_PUBLIC_V6_ALT,
+  SYNTH_PUBLIC_V6_PATCH_A,
+  SYNTH_PUBLIC_V6_PATCH_B,
+  SYNTH_PUBLIC_V6_SETUP,
+} from "../testLiterals";
 import { executeProfileSetup } from "../vpn/setupRunner";
 import type { SshExecFn } from "../vpn/sshExec";
 
@@ -90,7 +96,7 @@ describe("profilesRoutes", () => {
       },
       body: JSON.stringify({
         label: "Pub",
-        host: "203.0.113.20",
+        host: SYNTH_PUBLIC_V6_ALT,
         sshPort: 22,
         sshUser: "root",
         sshPassword: "pw",
@@ -103,7 +109,7 @@ describe("profilesRoutes", () => {
       panelReachabilityDetail: string | null;
       panelReachabilityCheckedAt: string | null;
     };
-    expect(body.panelHostname).toBe("203.0.113.20");
+    expect(body.panelHostname).toBe(SYNTH_PUBLIC_V6_ALT);
     expect(body.panelReachability).toBe("checking");
     expect(body.panelReachabilityDetail).toBeNull();
     expect(body.panelReachabilityCheckedAt).toBeNull();
@@ -639,12 +645,12 @@ describe("profilesRoutes", () => {
         sshPort: 22,
         sshUser: "root",
         sshPassword: "secretpw",
-        panelHostname: "203.0.113.55",
+        panelHostname: "panel-login.example.com",
       }),
     });
 
     await seedWorkingProfileAfterInstall(db, env.masterKey, 1, {
-      webBasePath: "xUiDocBase18char",
+      webBasePath: "fakeBasePath18Chars",
       panelPort: 5443,
     });
 
@@ -653,7 +659,7 @@ describe("profilesRoutes", () => {
     });
     expect(loginRes.status).toBe(200);
     const body = (await loginRes.json()) as { panelUrl: string };
-    expect(body.panelUrl).toBe("https://203.0.113.55:5443/xUiDocBase18char/");
+    expect(body.panelUrl).toBe("https://panel-login.example.com:5443/fakeBasePath18Chars/");
   });
 
   test("GET /api/profiles/:id/panel-login returns 404 when profile missing", async () => {
@@ -746,7 +752,7 @@ describe("profilesRoutes", () => {
       },
       body: JSON.stringify({
         label: "W",
-        host: "1.1.1.1",
+        host: SYNTH_PUBLIC_V6_SETUP,
         sshPort: 22,
         sshUser: "root",
         sshPassword: "pw",
@@ -772,7 +778,7 @@ describe("profilesRoutes", () => {
       },
       body: JSON.stringify({
         label: "A",
-        host: "198.51.100.2",
+        host: SYNTH_PUBLIC_V6_PATCH_A,
         sshPort: 22,
         sshUser: "root",
         sshPassword: "pw",
@@ -785,12 +791,12 @@ describe("profilesRoutes", () => {
         "Content-Type": "application/json",
         Cookie: `${SESSION_COOKIE}=session-token`,
       },
-      body: JSON.stringify({ host: "198.51.100.3", panelHostname: "" }),
+      body: JSON.stringify({ host: SYNTH_PUBLIC_V6_PATCH_B, panelHostname: "" }),
     });
     expect(patchRes.status).toBe(200);
     const body = (await patchRes.json()) as { panelHostname: string; host: string };
-    expect(body.host).toBe("198.51.100.3");
-    expect(body.panelHostname).toBe("198.51.100.3");
+    expect(body.host).toBe(SYNTH_PUBLIC_V6_PATCH_B);
+    expect(body.panelHostname).toBe(SYNTH_PUBLIC_V6_PATCH_B);
   });
 
   test("POST persists optional panel secrets and probe updates stored reachability", async () => {
@@ -1028,7 +1034,7 @@ describe("profilesRoutes", () => {
       },
       body: JSON.stringify({
         label: "X",
-        host: "1.2.3.4",
+        host: "vpn.pending.example.com",
         sshPort: 22,
         sshUser: "u",
         sshPassword: "p",
@@ -1054,7 +1060,7 @@ describe("profilesRoutes", () => {
     database
       .query(
         `INSERT INTO vpn_profiles (id, label, host, ssh_port, ssh_user, ssh_password_ciphertext, ssh_password_nonce, panel_hostname, operational_status)
-         VALUES (1, 'Ssh', '127.0.0.1', 22, 'root', ?, ?, 'panel.test', 'pending')`,
+         VALUES (1, 'Ssh', 'ssh.hub.example.com', 22, 'root', ?, ?, 'panel.test', 'pending')`,
       )
       .run(ciphertext, nonce);
   }

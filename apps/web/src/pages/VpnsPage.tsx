@@ -1528,7 +1528,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                       onChange={(event) =>
                         setFormValues((current) => ({ ...current, panelHostname: event.target.value }))
                       }
-                      placeholder="panel.example.com or 203.0.113.10"
+                      placeholder="panel.example.com"
                       style={inputStyle}
                       value={formValues.panelHostname}
                     />
