@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { decryptVpnPassword } from "../crypto/vpnSecret";
@@ -14,6 +16,34 @@ import {
   provisionMultihopChainClientAccess,
 } from "../xui/provisionMultihopChainClientAccess";
 import { runXuiUfwSyncWithRetries } from "../xui/runXuiUfwSync";
+
+// #region agent log
+/** Repo-root `debug-f5845d.log` (from `apps/server/src/routes/`). */
+const DEBUG_LOG_PATH = join(import.meta.dir, "../../../..", "debug-f5845d.log");
+
+function debugAgentLog(
+  hypothesisId: string,
+  location: string,
+  message: string,
+  data: Record<string, unknown>,
+): void {
+  try {
+    appendFileSync(
+      DEBUG_LOG_PATH,
+      `${JSON.stringify({
+        sessionId: "f5845d",
+        hypothesisId,
+        location,
+        message,
+        data,
+        timestamp: Date.now(),
+      })}\n`,
+    );
+  } catch {
+    /* ignore */
+  }
+}
+// #endregion
 
 type ChainListRow = {
   chain_id: number;
@@ -377,6 +407,10 @@ export function chainsRoutes(
       return c.json({ error: "Chain has no hops." }, 400);
     }
 
+    // #region agent log
+    debugAgentLog("H4", "chains.ts:generate-profile", "enter", { chainId: id, hopCount: chain.hops.length });
+    // #endregion
+
     const hops: HopPanelContext[] = [];
     const profileSshById = new Map<
       number,
@@ -462,6 +496,10 @@ export function chainsRoutes(
       }
     }
 
+    // #region agent log
+    debugAgentLog("H4", "chains.ts:generate-profile", "hops_built", { chainId: id, hopsLen: hops.length });
+    // #endregion
+
     try {
       const result = await provisionMultihopChainClientAccess({
         chainId: id,
@@ -475,7 +513,19 @@ export function chainsRoutes(
         subscriptionUrl: result.subscriptionUrl,
       };
 
+      // #region agent log
+      debugAgentLog("H1", "chains.ts:generate-profile", "provision_done", {
+        chainId: id,
+        ciIsArray: Array.isArray(result.createdInbounds),
+        ciLen: result.createdInbounds.length,
+        vpnSshEnabled: appSettings.vpnSshEnabled,
+      });
+      // #endregion
+
       if (!appSettings.vpnSshEnabled) {
+        // #region agent log
+        debugAgentLog("H2", "chains.ts:generate-profile", "skip_firewall_branch", { chainId: id });
+        // #endregion
         return c.json(responsePayload);
       }
 
@@ -487,6 +537,13 @@ export function chainsRoutes(
           orderedProfileIds.push(hop.vpnProfileId);
         }
       }
+
+      // #region agent log
+      debugAgentLog("H2", "chains.ts:generate-profile", "firewall_try_enter", {
+        chainId: id,
+        orderedProfileIdsLen: orderedProfileIds.length,
+      });
+      // #endregion
 
       try {
         for (const profileId of orderedProfileIds) {
@@ -509,16 +566,41 @@ export function chainsRoutes(
             timeoutMs: 60_000,
           });
         }
-      } catch {
-        await compensateCreatedInbounds({
-          createdInbounds: result.createdInbounds,
-          fetchFn: globalThis.fetch,
+      } catch (e) {
+        // #region agent log
+        debugAgentLog("H3", "chains.ts:generate-profile", "firewall_inner_catch", {
+          err: String(e),
+          name: e instanceof Error ? e.name : "non-error",
         });
+        // #endregion
+        try {
+          await compensateCreatedInbounds({
+            createdInbounds: result.createdInbounds,
+            fetchFn: globalThis.fetch,
+          });
+        } catch (comp) {
+          // #region agent log
+          debugAgentLog("H3", "chains.ts:generate-profile", "compensate_threw", {
+            err: String(comp),
+            name: comp instanceof Error ? comp.name : "non-error",
+          });
+          // #endregion
+          throw comp;
+        }
         return c.json({ error: "Firewall sync failed." }, 502);
       }
 
+      // #region agent log
+      debugAgentLog("H5", "chains.ts:generate-profile", "success_with_firewall", { chainId: id });
+      // #endregion
       return c.json(responsePayload);
-    } catch {
+    } catch (e) {
+      // #region agent log
+      debugAgentLog("H1", "chains.ts:generate-profile", "outer_catch", {
+        err: String(e),
+        name: e instanceof Error ? e.name : "non-error",
+      });
+      // #endregion
       // Do not forward panel or transport exception text to the client (avoid leaking internals).
       return c.json({ error: "Panel request failed." }, 502);
     }
