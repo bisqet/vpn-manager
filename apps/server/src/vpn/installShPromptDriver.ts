@@ -2,8 +2,9 @@
  * Expect-style prompt handling for MHSanaei/3x-ui `install.sh` over a PTY.
  * `whenIncludes` strings are matched against decoded plaintext (see `ptyPlaintext.ts`).
  *
- * When {@link RunPromptDriverOptions.completionIncludes} appears in plaintext after a chunk,
- * the driver settles with `status: "completed"` (install script reached the final banner).
+ * When any string in {@link RunPromptDriverOptions.completionIncludes} appears in plaintext
+ * after a chunk, the driver settles with `status: "completed"` (install script reached a
+ * terminal marker).
  */
 
 export type PromptRule = {
@@ -93,8 +94,18 @@ export type RunPromptDriverOptions = {
   };
   globalTimeoutMs: number;
   signal: AbortSignal;
-  /** When plaintext includes this substring, resolve `completed` (checked after each chunk). */
-  completionIncludes?: string;
+  /**
+   * When plaintext includes any of these substrings, resolve `completed` (checked after each chunk).
+   */
+  completionIncludes?: string | string[];
+  /**
+   * After `completed`, keep capturing PTY data for this long so later chunks (e.g. Username /
+   * Access URL lines printed after the banner) are appended before unsubscribe.
+   * Default 1500ms when `completionIncludes` is set; otherwise 0. Tests may pass 0.
+   */
+  tailDrainAfterCompleteMs?: number;
+  /** Invoked immediately after subscribing to PTY data (e.g. send the command that produces output). */
+  afterSubscribe?: () => void;
 };
 
 export type RunPromptDriverResult =
@@ -111,7 +122,31 @@ function lineForReadRp(send: string): string {
  * the first chunk and resets after each successful rule write.
  */
 export async function runPromptDriver(options: RunPromptDriverOptions): Promise<RunPromptDriverResult> {
-  const { write, subscribeData, rules, plaintext, globalTimeoutMs, signal, completionIncludes } = options;
+  const {
+    write,
+    subscribeData,
+    rules,
+    plaintext,
+    globalTimeoutMs,
+    signal,
+    completionIncludes,
+    tailDrainAfterCompleteMs,
+    afterSubscribe,
+  } = options;
+
+  const completionMarkers =
+    completionIncludes === undefined
+      ? []
+      : Array.isArray(completionIncludes)
+        ? completionIncludes
+        : [completionIncludes];
+
+  const resolvedTailDrain =
+    tailDrainAfterCompleteMs !== undefined
+      ? tailDrainAfterCompleteMs
+      : completionMarkers.length > 0
+        ? 1500
+        : 0;
 
   let settled = false;
   let lastRuleId: string | undefined;
@@ -132,7 +167,6 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
       settled = true;
       clearGlobalTimer();
       signal.removeEventListener("abort", onAbort);
-      userUnsubscribe?.();
       resolve(r);
     };
   });
@@ -171,7 +205,7 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
       bumpGlobalTimer();
       return;
     }
-    if (completionIncludes && text.includes(completionIncludes)) {
+    if (completionMarkers.length > 0 && completionMarkers.some((m) => text.includes(m))) {
       settle({ status: "completed", lastRuleId });
     }
   };
@@ -185,6 +219,12 @@ export async function runPromptDriver(options: RunPromptDriverOptions): Promise<
   };
 
   userUnsubscribe = subscribeData(onChunk);
+  afterSubscribe?.();
 
-  return await done;
+  const result = await done;
+  if (result.status === "completed" && resolvedTailDrain > 0) {
+    await new Promise<void>((resolve) => setTimeout(resolve, resolvedTailDrain));
+  }
+  userUnsubscribe?.();
+  return result;
 }

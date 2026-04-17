@@ -315,6 +315,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
         adminUsername: "u",
         adminPassword: "p",
         webBasePath: "wb",
+        panelPort: null,
         plainTranscript: "",
       }) satisfies InstallShSetupResult;
     const { handlers, client } = openHandlers(ws, completingMock, async () => {});
@@ -336,6 +337,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
         adminUsername: "u",
         adminPassword: "p",
         webBasePath: "wb",
+        panelPort: null,
         plainTranscript: "",
       }) satisfies InstallShSetupResult;
     const { handlers, client } = openHandlers(ws, completingMock, async () => {});
@@ -433,6 +435,7 @@ describe("createProfileSetupTerminalWebSocketHandlers", () => {
         adminUsername: "u",
         adminPassword: "p",
         webBasePath: "wb",
+        panelPort: null,
         plainTranscript: "",
       }) satisfies InstallShSetupResult;
 

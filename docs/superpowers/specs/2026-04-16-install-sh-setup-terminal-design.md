@@ -2,14 +2,16 @@
 
 **Date:** 2026-04-16  
 **Status:** Approved (2026-04-16)  
-**Supersedes (for setup automation content):** `2026-04-15-setup-via-terminal-design.md` describes the **previous** model (phased `buildSetupPhases`, viewer-only client, Caddy-backed HTTPS). This spec replaces that **automation** story while keeping the **same route and sheet** where practical (`GET /api/profiles/:id/setup-terminal`, Pending gates, mutex, detach/stop semantics unless revised below).
+**Supersedes (for setup automation content):** `2026-04-15-setup-via-terminal-design.md` describes the **previous** model (phased `buildSetupPhases`, viewer-only client, reverse proxy (historical)-backed HTTPS). This spec replaces that **automation** story while keeping the **same route and sheet** where practical (`GET /api/profiles/:id/setup-terminal`, Pending gates, mutex, detach/stop semantics unless revised below).
+
+**Deployment note:** **reverse proxy (historical)** in the superseded model is **not** part of intended operations; TLS comes from **upstream installer / panel** choices instead.
 
 ## Decision log
 
 | Topic | Choice |
 |-------|--------|
 | Installer | Upstream **`install.sh`** fetched from GitHub **`master`** (URL fixed in implementation; branch may be pinned later). |
-| Prior phased remote scripts | **Remove** from the setup path: no `buildSetupPhases` execution for setup-terminal (preflight, ufw, tarball install, `configure_xui`, Caddy install/configure, loopback verify). |
+| Prior phased remote scripts | **Remove** from the setup path: no `buildSetupPhases` execution for setup-terminal (preflight, ufw, tarball install, `configure_xui`, reverse proxy (historical) install/configure, loopback verify). |
 | Client UX | **Same interaction model as SSH:** xterm sends **resize + keystrokes** to the server; server forwards to the PTY **when policy allows** (see “Input policy”). |
 | Prompts | **Server answers** all `install.sh` prompts **without requiring the operator to type**, via an **expect-style** driver (pattern match on PTY output → inject bytes). |
 | Post-install secrets | **(A)** Recover **admin username and password** by **parsing fixed phrases / patterns** from the **combined PTY transcript** (stdout as seen on the wire). **No** post-step `x-ui setting -username …` to overwrite installer-chosen values (that was option B). |
@@ -24,7 +26,7 @@
 
 ## Non-goals
 
-- **Re-implementing** upstream install behavior in shell phases (no VPN Manager–owned Caddy/UFW/x-ui tarball path for this flow).
+- **Re-implementing** upstream install behavior in shell phases (no VPN Manager–owned reverse proxy (historical)/UFW/x-ui tarball path for this flow).
 - **Guaranteeing** TLS/firewall behavior: deferred to whatever `install.sh` + OS provide.
 - **Multi-region** or **multi-API** coordination beyond existing per-`profileId` mutex.
 
@@ -82,4 +84,4 @@
 
 - No unresolved “TBD” left; open points are explicitly listed above.
 - Choice **A** is consistent with “no `x-ui setting` overwrite after install.”
-- Scope is single-product-path replacement for setup-terminal automation; does not claim to preserve bare-IP Caddy behavior from earlier specs.
+- Scope is single-product-path replacement for setup-terminal automation; does not claim to preserve bare-IP reverse proxy (historical) behavior from earlier specs.

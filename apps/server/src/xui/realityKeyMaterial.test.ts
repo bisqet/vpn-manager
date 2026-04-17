@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { generateRealityClientMaterial, randomRealityShortId, randomSubId } from "./realityKeyMaterial";
 
-function decodeBase64(s: string): Uint8Array {
-  return new Uint8Array(Buffer.from(s, "base64"));
+function decodeRealityKeyB64(s: string): Uint8Array {
+  return new Uint8Array(Buffer.from(s, "base64url"));
 }
 
 describe("generateRealityClientMaterial", () => {
@@ -16,8 +16,8 @@ describe("generateRealityClientMaterial", () => {
     const m = await generateRealityClientMaterial();
     expect(m.realityPrivateKeyB64.length).toBeGreaterThan(0);
     expect(m.realityPublicKeyB64.length).toBeGreaterThan(0);
-    const priv = decodeBase64(m.realityPrivateKeyB64);
-    const pub = decodeBase64(m.realityPublicKeyB64);
+    const priv = decodeRealityKeyB64(m.realityPrivateKeyB64);
+    const pub = decodeRealityKeyB64(m.realityPublicKeyB64);
     expect(priv.byteLength).toBe(32);
     expect(pub.byteLength).toBe(32);
   });

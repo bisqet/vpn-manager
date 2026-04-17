@@ -3,7 +3,6 @@ import {
   VPNMGR_RECOVER_MARKER_AFTER_SET,
   VPNMGR_RECOVER_MARKER_AFTER_SHOW,
 } from "./installShExistingPanelRecover";
-import { VPNMGR_SUB_PATH_HARDEN_OK } from "./installShSubscriptionPathHardening";
 import { runInstallShSetupSession } from "./runInstallShSetupSession";
 
 const encoder = new TextEncoder();
@@ -20,19 +19,12 @@ describe("runInstallShSetupSession", () => {
   test("port prompt then completion banner yields success with parsed credentials", async () => {
     const writes: string[] = [];
     const ac = new AbortController();
-    let handlerRef: ((c: Uint8Array) => void) | null = null;
 
     const result = await runInstallShSetupSession({
       write: (data) => {
-        const s = typeof data === "string" ? data : new TextDecoder().decode(data);
-        writes.push(s);
-        const h = handlerRef;
-        if (h && s.includes("subJsonPath") && s.includes("sqlite3")) {
-          queueMicrotask(() => h(encoder.encode(`${VPNMGR_SUB_PATH_HARDEN_OK}\n`)));
-        }
+        writes.push(typeof data === "string" ? data : new TextDecoder().decode(data));
       },
       subscribePtyData: (handler) => {
-        handlerRef = handler;
         queueMicrotask(() => {
           handler(encoder.encode("Would you like to customize the Panel Port settings?\n"));
           queueMicrotask(() => {
@@ -82,19 +74,12 @@ describe("runInstallShSetupSession", () => {
   test("banner chunk before credential lines still parses when tail drain catches later PTY", async () => {
     const writes: string[] = [];
     const ac = new AbortController();
-    let handlerRef: ((c: Uint8Array) => void) | null = null;
 
     const result = await runInstallShSetupSession({
       write: (data) => {
-        const s = typeof data === "string" ? data : new TextDecoder().decode(data);
-        writes.push(s);
-        const h = handlerRef;
-        if (h && s.includes("subJsonPath") && s.includes("sqlite3")) {
-          queueMicrotask(() => h(encoder.encode(`${VPNMGR_SUB_PATH_HARDEN_OK}\n`)));
-        }
+        writes.push(typeof data === "string" ? data : new TextDecoder().decode(data));
       },
       subscribePtyData: (handler) => {
-        handlerRef = handler;
         handler(encoder.encode("Would you like to customize the Panel Port settings?\n"));
         handler(encoder.encode("Panel Installation Complete!\n"));
         setTimeout(() => {
@@ -146,9 +131,6 @@ Access URL: https://panel.example.com:8443/webpath123456789012
         if (s.includes("setting -username")) {
           queueMicrotask(() => h(enc.encode(`ok\n${VPNMGR_RECOVER_MARKER_AFTER_SET}\n`)));
         }
-        if (s.includes("subJsonPath") && s.includes("sqlite3")) {
-          queueMicrotask(() => h(enc.encode(`${VPNMGR_SUB_PATH_HARDEN_OK}\n`)));
-        }
       },
       subscribePtyData: (h) => {
         const isFirst = handlerRef === null;
@@ -171,25 +153,5 @@ Access URL: https://panel.example.com:8443/webpath123456789012
     expect(result.panelPort).toBe(45543);
     expect(writes.some((w) => w.includes("setting -show"))).toBe(true);
     expect(writes.some((w) => w.includes("setting -username"))).toBe(true);
-  });
-
-  test("subscription hardening failure yields failed outcome", async () => {
-    const result = await runInstallShSetupSession({
-      write: () => {},
-      subscribePtyData: (h) => {
-        h(encoder.encode("Would you like to customize the Panel Port settings?\n"));
-        h(encoder.encode(completionBanner));
-        return () => {};
-      },
-      panelHostname: "panel.example.com",
-      signal: new AbortController().signal,
-      installCommand: ":",
-      tailDrainAfterCompleteMs: 0,
-      runSubscriptionPathHardeningOnPtyImpl: async () => false,
-    });
-
-    expect(result.outcome).toBe("failed");
-    if (result.outcome !== "failed") throw new Error("expected failed");
-    expect(result.reason.toLowerCase()).toContain("subscription uri hardening");
   });
 });

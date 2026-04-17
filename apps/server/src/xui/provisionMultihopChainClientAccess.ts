@@ -1,4 +1,3 @@
-import { agentDebugLog } from "../debug/agentDebugLog";
 import { buildVlessRealityInboundBody } from "./buildVlessRealityInboundBody";
 import { buildVlessRealityOutbound } from "./buildVlessRealityOutbound";
 import {
@@ -181,14 +180,6 @@ export async function provisionMultihopChainClientAccess(
 ): Promise<ChainClientAccessResult> {
   const hops = input.hops;
   const fetchFn = input.fetchFn ?? fetch;
-  // #region agent log
-  agentDebugLog({
-    location: "provisionMultihopChainClientAccess.ts:entry",
-    message: "provision_start",
-    data: { chainId: input.chainId, hopCount: hops.length, singleHop: hops.length === 1 },
-    hypothesisId: "H4",
-  });
-  // #endregion
   if (hops.length === 0) {
     throw new PanelRequestError("chain has no hops");
   }
@@ -302,15 +293,6 @@ export async function provisionMultihopChainClientAccess(
     addJson: userAddJson,
   });
 
-  // #region agent log
-  agentDebugLog({
-    location: "provisionMultihopChainClientAccess.ts:after_user_inbound",
-    message: "phase_inbounds_done",
-    data: { chainId: input.chainId, downstreamEdges: edgeByDownstreamIndex.size },
-    hypothesisId: "H2",
-  });
-  // #endregion
-
   for (let k = 0; k <= hops.length - 2; k++) {
     const hop = hops[k]!;
     const nextHop = hops[k + 1]!;
@@ -340,19 +322,6 @@ export async function provisionMultihopChainClientAccess(
       fetchFn,
     });
     const bundle = await fetchPanelXrayBundle({ panelBaseUrl: hop.panelBaseUrl, cookieHeader, fetchFn });
-    // #region agent log
-    agentDebugLog({
-      location: "provisionMultihopChainClientAccess.ts:forward_xray",
-      message: "before_xray_json_parse_forwarder",
-      data: {
-        chainId: input.chainId,
-        forwarderIndex: k,
-        xraySettingLen: bundle.xraySettingText.length,
-        xraySettingHead: bundle.xraySettingText.slice(0, 80),
-      },
-      hypothesisId: "H2",
-    });
-    // #endregion
     const xrayObj = JSON.parse(bundle.xraySettingText) as Record<string, unknown>;
     let merged = appendOutbound({ xray: xrayObj, outbound });
     merged = mergeInboundToOutboundRule({
@@ -387,18 +356,6 @@ export async function provisionMultihopChainClientAccess(
     cookieHeader: lastSession.cookieHeader,
     fetchFn,
   });
-  // #region agent log
-  agentDebugLog({
-    location: "provisionMultihopChainClientAccess.ts:last_hop",
-    message: "before_xray_json_parse_last",
-    data: {
-      chainId: input.chainId,
-      xraySettingLen: lastBundle.xraySettingText.length,
-      xraySettingHead: lastBundle.xraySettingText.slice(0, 80),
-    },
-    hypothesisId: "H2",
-  });
-  // #endregion
   const lastXray = JSON.parse(lastBundle.xraySettingText) as Record<string, unknown>;
   const directTag = findFreedomOutboundTag(lastXray as { outbounds?: unknown[] });
   const lastMerged = mergeInboundToOutboundRule({

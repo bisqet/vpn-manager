@@ -975,6 +975,49 @@ describe("profilesRoutes", () => {
     expect(after!.panel_reachability_checked_at).toEqual(expect.any(String));
   });
 
+  test("POST panel-reachability-check requires auth and reruns probe", async () => {
+    const app = createApp(db, env, {
+      profiles: {
+        reachabilityProbeRunner: async (o) => {
+          await runPanelReachabilityProbe({
+            ...o,
+            fetchFn: async () => new Response(null, { status: 401 }),
+          });
+        },
+      },
+    });
+
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "ProbeBtn",
+        host: "vpn2.example.com",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "hunter2",
+        panelHostname: "panel.vpn2.example.com",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    db.query(`UPDATE vpn_profiles SET panel_reachability = 'unknown' WHERE id = 1`).run();
+
+    const noCookie = await app.request("/api/profiles/1/panel-reachability-check", { method: "POST" });
+    expect(noCookie.status).toBe(401);
+
+    const checkRes = await app.request("/api/profiles/1/panel-reachability-check", {
+      method: "POST",
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(checkRes.status).toBe(200);
+    const body = (await checkRes.json()) as { panelReachability: string };
+    expect(body.panelReachability).toBe("reachable");
+  });
+
   test("PATCH updates fields without changing operationalStatus from pending", async () => {
     const app = createApp(db, env);
     await app.request("/api/profiles", {

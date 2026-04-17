@@ -7,6 +7,13 @@ import {
   provisionChainClientAccess,
 } from "./provisionChainClientAccess";
 
+function isCandidateListenPort(p: number): boolean {
+  if (p === 443) return true;
+  if (p >= 8443 && p <= 8999) return true;
+  if (p >= 30000 && p <= 32000) return true;
+  return false;
+}
+
 describe("buildSubscriptionUrl", () => {
   test("resolves 3x-ui style /sub/{subId} relative to normalized panel base", () => {
     expect(buildSubscriptionUrl("https://panel.example.com:8443", "a1b2c3d4e5f6789a")).toBe(
@@ -19,12 +26,23 @@ describe("buildSubscriptionUrl", () => {
 });
 
 describe("pickFreeListenPort", () => {
-  test("prefers 443 when unused", () => {
-    expect(pickFreeListenPort(new Set())).toBe(443);
+  test("returns a random free port from the candidate ranges when many are free", () => {
+    const p = pickFreeListenPort(new Set());
+    expect(isCandidateListenPort(p)).toBe(true);
   });
 
-  test("uses 8443 when 443 is taken", () => {
-    expect(pickFreeListenPort(new Set([443]))).toBe(8443);
+  test("avoids 443 when 443 is taken", () => {
+    const p = pickFreeListenPort(new Set([443]));
+    expect(p).not.toBe(443);
+    expect(isCandidateListenPort(p)).toBe(true);
+  });
+
+  test("throws when every candidate port is used", () => {
+    const used = new Set<number>();
+    used.add(443);
+    for (let p = 8443; p <= 8999; p++) used.add(p);
+    for (let p = 30000; p <= 32000; p++) used.add(p);
+    expect(() => pickFreeListenPort(used)).toThrow(PanelRequestError);
   });
 });
 
@@ -41,8 +59,8 @@ describe("provisionChainClientAccess", () => {
       clientUuid: "11111111-1111-4111-8111-111111111111",
       subId: "a1b2c3d4e5f6789a",
       shortId: "01234567",
-      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64"),
-      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
+      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64url"),
+      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64url"),
     });
 
     const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
@@ -84,15 +102,16 @@ describe("provisionChainClientAccess", () => {
         expect(headers.get("cookie")).toContain("3x-ui=abc");
         expect(headers.get("content-type")?.toLowerCase()).toContain("application/json");
         const sent = JSON.parse(init?.body as string) as Record<string, unknown>;
-        expect(sent.port).toBe(443);
+        const chosen = Number(sent.port);
+        expect(isCandidateListenPort(chosen)).toBe(true);
 
         const addObj = {
-          port: 443,
+          port: chosen,
           protocol: "vless",
           settings: JSON.stringify(settingsClients),
           streamSettings: inboundBody.streamSettings,
         };
-        expect(init?.body).toBe(JSON.stringify({ ...inboundBody, port: 443 }));
+        expect(init?.body).toBe(JSON.stringify({ ...inboundBody, port: chosen }));
 
         return new Response(
           JSON.stringify({
@@ -129,8 +148,8 @@ describe("provisionChainClientAccess", () => {
       clientUuid: "22222222-2222-4222-8222-222222222222",
       subId: "subidfail",
       shortId: "01234567",
-      realityPrivateKeyB64: Buffer.alloc(32, 1).toString("base64"),
-      realityPublicKeyB64: Buffer.alloc(32, 2).toString("base64"),
+      realityPrivateKeyB64: Buffer.alloc(32, 1).toString("base64url"),
+      realityPublicKeyB64: Buffer.alloc(32, 2).toString("base64url"),
     });
 
     const fetchMock = mock(async (input: RequestInfo | URL) => {
@@ -176,8 +195,8 @@ describe("provisionChainClientAccess", () => {
       clientUuid: "11111111-1111-4111-8111-111111111111",
       subId: "a1b2c3d4e5f6789a",
       shortId: "01234567",
-      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64"),
-      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
+      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64url"),
+      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64url"),
     });
 
     const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
@@ -209,8 +228,10 @@ describe("provisionChainClientAccess", () => {
       }
 
       if (url === "http://panel.downgrade/prefix/panel/api/inbounds/add") {
+        const sent = JSON.parse(init?.body as string) as { port?: unknown };
+        const chosen = Number(sent.port);
         const addObj = {
-          port: 443,
+          port: chosen,
           protocol: "vless",
           settings: JSON.stringify(settingsClients),
           streamSettings: inboundBody.streamSettings,
@@ -254,17 +275,11 @@ describe("provisionChainClientAccess", () => {
       clientUuid: "11111111-1111-4111-8111-111111111111",
       subId: "a1b2c3d4e5f6789a",
       shortId: "01234567",
-      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64"),
-      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
+      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64url"),
+      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64url"),
     });
 
     const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
-    const addObj = {
-      port: 443,
-      protocol: "vless",
-      settings: JSON.stringify(settingsClients),
-      streamSettings: inboundBody.streamSettings,
-    };
 
     const seenUrls: string[] = [];
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -289,6 +304,14 @@ describe("provisionChainClientAccess", () => {
       }
 
       if (url.endsWith("/panel/api/inbounds/add")) {
+        const sent = JSON.parse(init?.body as string) as { port?: unknown };
+        const chosen = Number(sent.port);
+        const addObj = {
+          port: chosen,
+          protocol: "vless",
+          settings: JSON.stringify(settingsClients),
+          streamSettings: inboundBody.streamSettings,
+        };
         return new Response(
           JSON.stringify({
             success: true,

@@ -1,8 +1,6 @@
 import { isPublicIpLiteral } from "../net/panelAddress";
 import { recoverPanelSecretsWhenNoInstallBanner } from "./installShExistingPanelRecover";
-import { runSubscriptionPathHardeningOnPty } from "./installShSubscriptionPathHardening";
 import { createInstallShPromptRules, runPromptDriver } from "./installShPromptDriver";
-import { makeDistinctSubscriptionPathDbValues } from "./xuiSubscriptionPaths";
 import { createPtyPlaintextBuffer } from "./ptyPlaintext";
 import { parseInstallShCredentials } from "./installShTranscriptParser";
 
@@ -34,8 +32,6 @@ export async function runInstallShSetupSession(options: {
    * chunks are captured (default applied in {@link runPromptDriver}). Tests may pass 0.
    */
   tailDrainAfterCompleteMs?: number;
-  /** Test hook: override subscription hardening (default: {@link runSubscriptionPathHardeningOnPty}). */
-  runSubscriptionPathHardeningOnPtyImpl?: typeof runSubscriptionPathHardeningOnPty;
 }): Promise<InstallShSetupResult> {
   const {
     write,
@@ -45,10 +41,7 @@ export async function runInstallShSetupSession(options: {
     installCommand = DEFAULT_INSTALL_COMMAND,
     globalTimeoutMs,
     tailDrainAfterCompleteMs,
-    runSubscriptionPathHardeningOnPtyImpl,
   } = options;
-
-  const harden = runSubscriptionPathHardeningOnPtyImpl ?? runSubscriptionPathHardeningOnPty;
 
   const trim = panelHostname.trim();
   const buffer = createPtyPlaintextBuffer();
@@ -111,24 +104,6 @@ export async function runInstallShSetupSession(options: {
       reason:
         "could not obtain panel credentials from install output or x-ui CLI (check transcript tail)",
       plainTranscript,
-    };
-  }
-
-  const { subPathDb, subJsonPathDb } = makeDistinctSubscriptionPathDbValues(credentials.webBasePath);
-  const hardened = await harden({
-    write,
-    subscribePtyData,
-    plaintext: buffer,
-    signal,
-    subPathDb,
-    subJsonPathDb,
-  });
-  if (!hardened) {
-    return {
-      outcome: "failed",
-      reason:
-        "subscription URI hardening failed (sqlite / systemd); panel may still use default /sub/ or /json/ paths — see transcript",
-      plainTranscript: buffer.getPlaintext(),
     };
   }
 

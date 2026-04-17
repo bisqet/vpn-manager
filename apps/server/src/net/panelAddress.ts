@@ -79,15 +79,6 @@ export function resolvePanelHostname(input: { host: string; panel: string }): Re
   };
 }
 
-/** Caddy site address key (first token of site block, before `{`). */
-export function caddySiteAddressKey(panel: string): string {
-  if (isPublicIpLiteral(panel)) {
-    const norm = normalizeIpLiteral(panel);
-    return norm.includes(":") ? `[${norm}]` : norm;
-  }
-  return panel;
-}
-
 /** Host portion for https URL (IPv6 bracketed). */
 export function httpsUrlHost(panel: string): string {
   if (isPublicIpLiteral(panel)) {
@@ -98,10 +89,15 @@ export function httpsUrlHost(panel: string): string {
 }
 
 /**
- * HTTPS URL for the 3x-ui panel behind Caddy, matching verify curl in setupPhases.
+ * HTTPS URL for the 3x-ui panel. When `panelPort` is null/443, the URL uses the default HTTPS
+ * port. Otherwise includes an explicit port (direct x-ui listener, e.g. install.sh).
  * Returns null if hostname or path is missing/blank.
  */
-export function buildPanelHttpsUrl(panelHostname: string, webBasePath: string | null): string | null {
+export function buildPanelHttpsUrl(
+  panelHostname: string,
+  webBasePath: string | null,
+  panelPort?: number | null,
+): string | null {
   const hostKey = panelHostname.trim();
   if (!hostKey) return null;
   if (webBasePath === null) return null;
@@ -109,5 +105,25 @@ export function buildPanelHttpsUrl(panelHostname: string, webBasePath: string | 
   if (base === "") return null;
   const webPathForUrl = base.startsWith("/") ? base : `/${base}`;
   const httpsHost = httpsUrlHost(hostKey);
-  return `https://${httpsHost}${webPathForUrl}/`;
+  const p =
+    panelPort != null && Number.isFinite(panelPort)
+      ? Math.trunc(panelPort)
+      : null;
+  const portSuffix =
+    p !== null && p > 0 && p !== 443 && p <= 65535 ? `:${p}` : "";
+  return `https://${httpsHost}${portSuffix}${webPathForUrl}/`;
+}
+
+/**
+ * HTTP URL for the panel bound to loopback (e.g. phased verify curl on the VPS).
+ * Returns null if path is missing/blank.
+ */
+export function buildPanelLoopbackHttpUrl(port: number, webBasePath: string | null): string | null {
+  if (webBasePath === null) return null;
+  const base = webBasePath.trim();
+  if (base === "") return null;
+  const webPathForUrl = base.startsWith("/") ? base : `/${base}`;
+  const path = webPathForUrl.endsWith("/") ? webPathForUrl : `${webPathForUrl}/`;
+  if (!Number.isFinite(port) || port < 1 || port > 65535) return null;
+  return `http://127.0.0.1:${Math.trunc(port)}${path}`;
 }

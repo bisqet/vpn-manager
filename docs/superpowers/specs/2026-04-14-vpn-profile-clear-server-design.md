@@ -4,6 +4,8 @@
 **Status:** Awaiting reader review  
 **Scope:** `apps/server` (new teardown workflow + API route) and `apps/web` (`VpnsPage` edit modal). Complements `2026-04-14-3x-ui-api-ssh-setup-design.md` and current `setupPhases` / `setupRunner` behavior.
 
+**Deployment note (2026-04-16):** **reverse proxy (historical)** steps below match **legacy** phased setup that this project **does not** target for new deployments; keep them only insofar as they mirror code still present on disk.
+
 ## Goal
 
 Add a **“Clear server from VPN services”** control on the **Edit VPN profile** modal that **reverses what live Setup created** on the remote host (per operator choice **B — strong cleanup**) and returns the profile to a **pre-success** state in the database so **Setup** can run again.
@@ -11,7 +13,7 @@ Add a **“Clear server from VPN services”** control on the **Edit VPN profile
 ## Non-goals
 
 - Changing **UFW** rules or disabling UFW (explicitly out of scope for **B**).
-- Removing **3x-ui** or **Caddy** if they were installed by means other than this app’s Setup (no fingerprinting beyond paths and lines this Setup created).
+- Removing **3x-ui** or **reverse proxy (historical)** if they were installed by means other than this app’s Setup (no fingerprinting beyond paths and lines this Setup created).
 - Interactive SSH from the browser (unchanged; teardown is API-driven like Setup).
 - Guaranteed idempotency on arbitrary manually broken servers; phases should be written to be **re-runnable** where practical, with clear errors when assumptions fail.
 
@@ -23,10 +25,10 @@ Recommended **phase order** (implementation must preserve safe ordering, e.g. st
 
 1. **Stop and disable 3x-ui:** `systemctl disable --now` the unit used by Setup (today: **`x-ui`**). Remove **`/etc/systemd/system/x-ui.service`** if present (Setup copies it from the tarball). `systemctl daemon-reload`.
 2. **Remove 3x-ui install tree:** `rm -rf /usr/local/x-ui` (matches Setup install location).
-3. **Remove our Caddy site file:** **`/etc/caddy/conf.d/vpn-manager-3x-ui.caddy`** (path defined in `setupPhases`; keep in sync).
+3. **Remove our reverse proxy (historical) site file:** **`/etc/caddy/conf.d/vpn-manager-3x-ui.caddy`** (path defined in `setupPhases`; keep in sync).
 4. **Caddyfile import line:** If **`/etc/caddy/Caddyfile`** contains the **exact** line Setup appends — `import /etc/caddy/conf.d/*.caddy` — remove **one** occurrence of that line (document in UI/help that hand-edited `Caddyfile`s may need manual cleanup if the line no longer matches).
-5. **Purge Caddy:** non-interactive **`apt-get purge -y caddy`** (or equivalent supported on Ubuntu 24).
-6. **Remove Caddy apt wiring added by Setup:** remove **`/etc/apt/sources.list.d/caddy-stable.list`** and **`/usr/share/keyrings/caddy-stable-archive-keyring.gpg`** (paths from Setup’s install script). Optionally run **`apt-get update`** afterward; not required for correctness if purge already ran.
+5. **Purge reverse proxy (historical):** non-interactive **`apt-get purge -y caddy`** (or equivalent supported on Ubuntu 24).
+6. **Remove reverse proxy (historical) apt wiring added by Setup:** remove **`/etc/apt/sources.list.d/caddy-stable.list`** and **`/usr/share/keyrings/caddy-stable-archive-keyring.gpg`** (paths from Setup’s install script). Optionally run **`apt-get update`** afterward; not required for correctness if purge already ran.
 
 **UFW:** no changes in any phase.
 

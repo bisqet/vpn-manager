@@ -134,8 +134,8 @@ describe("provisionMultihopChainClientAccess", () => {
       clientUuid: "11111111-1111-4111-8111-111111111111",
       subId: "a1b2c3d4e5f6789a",
       shortId: "01234567",
-      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64"),
-      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
+      realityPrivateKeyB64: Buffer.alloc(32, 3).toString("base64url"),
+      realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64url"),
     });
     const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
 

@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace placeholder VPN profile setup with a real, spec-aligned flow: global `VPN_SSH_ENABLED` gate, dry-run structured steps for the UI terminal sheet, live phased SSH execution to Ubuntu 24 hosts, 3x-ui + Caddy + `ufw`, generated admin credentials stored encrypted, `POST /setup` returns **409** when already `working`, and tests proving gates and dry-run behavior.
+**Goal:** Replace placeholder VPN profile setup with a real, spec-aligned flow: global `VPN_SSH_ENABLED` gate, dry-run structured steps for the UI terminal sheet, live phased SSH execution to Ubuntu 24 hosts, 3x-ui + reverse proxy (historical) + `ufw`, generated admin credentials stored encrypted, `POST /setup` returns **409** when already `working`, and tests proving gates and dry-run behavior.
 
-**Architecture:** Extend `Env` with `vpnSshEnabled` and `acmeEmail`. Add DB columns on `vpn_profiles` (`panel_hostname`, encrypted x-ui secret blob, optional `last_setup_error` / `last_setup_at`). Centralize **setup phase definitions** in a dedicated module that returns the same ordered steps for dry-run and for live execution; live path uses an **SSH adapter** (Bun child process `ssh` or a small wrapper) injected for tests. **Do not** run the full upstream `install.sh` if it blocks on interactive SSL — use the **tarball + systemd** path mirrored from upstream (`install_x-ui` in [3x-ui `install.sh`](https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)) so Caddy owns TLS. Apply admin credentials with `/usr/local/x-ui/x-ui setting -username … -password …` (see [3x-ui `x-ui.sh`](https://raw.githubusercontent.com/mhsanaei/3x-ui/main/x-ui.sh)). Bind the panel to loopback using whatever flag `x-ui setting -help` documents (spike task below).
+**Architecture:** Extend `Env` with `vpnSshEnabled` and `acmeEmail`. Add DB columns on `vpn_profiles` (`panel_hostname`, encrypted x-ui secret blob, optional `last_setup_error` / `last_setup_at`). Centralize **setup phase definitions** in a dedicated module that returns the same ordered steps for dry-run and for live execution; live path uses an **SSH adapter** (Bun child process `ssh` or a small wrapper) injected for tests. **Do not** run the full upstream `install.sh` if it blocks on interactive SSL — use the **tarball + systemd** path mirrored from upstream (`install_x-ui` in [3x-ui `install.sh`](https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)) so reverse proxy (historical) owns TLS. Apply admin credentials with `/usr/local/x-ui/x-ui setting -username … -password …` (see [3x-ui `x-ui.sh`](https://raw.githubusercontent.com/mhsanaei/3x-ui/main/x-ui.sh)). Bind the panel to loopback using whatever flag `x-ui setting -help` documents (spike task below).
 
 **Tech Stack:** Bun, Hono, `bun:sqlite`, Zod, existing `encryptVpnPassword` / `decryptVpnPassword` (AES-GCM) for new payloads, child-process SSH.
 
 **Spec:** `docs/superpowers/specs/2026-04-14-3x-ui-api-ssh-setup-design.md`
+
+**Deployment note (2026-04-16):** This plan’s **reverse proxy (historical)-centric** phased setup is **historical** for this repository; **do not** treat it as active product truth or extend it without aligning to the **no reverse proxy (see AGENTS.md)** deployment intent recorded in root `AGENTS.md`.
 
 ---
 
@@ -77,7 +79,7 @@ Append:
 # When false/unset, POST /api/profiles/:id/setup never opens SSH (dry-run only).
 VPN_SSH_ENABLED=false
 
-# Required for live setup (Caddy Let's Encrypt). Global for all profiles.
+# Required for live setup (reverse proxy (historical) Let's Encrypt). Global for all profiles.
 # ACME_EMAIL=ops@example.com
 
 # Live SSH with stored passwords requires the `sshpass` binary on the API host.
@@ -273,7 +275,7 @@ export type XuiSecretsPayloadV1 = {
   adminUsername: string;
   adminPassword: string;
 };
-// Note: web base path is stored in vpn_profiles.xui_web_base_path (plaintext) for HTTPS probes and Caddy routing.
+// Note: web base path is stored in vpn_profiles.xui_web_base_path (plaintext) for HTTPS probes and reverse proxy (historical) routing.
 
 export async function encryptXuiSecretsJson(
   masterKey: Uint8Array,
@@ -331,7 +333,7 @@ export const XUI_LOCAL_PANEL_PORT = 2053; // change if -help shows different def
 export const XUI_BIN = "/usr/local/x-ui/x-ui";
 ```
 
-If no listen flag exists, document in code comment that loopback binding relies on **Caddy-only exposure** plus `ufw` deny on the panel port from WAN (implement `ufw deny` / no rule for that port except localhost — use `ufw` route or iptables if required).
+If no listen flag exists, document in code comment that loopback binding relies on **reverse proxy (historical)-only exposure** plus `ufw` deny on the panel port from WAN (implement `ufw deny` / no rule for that port except localhost — use `ufw` route or iptables if required).
 
 - [ ] **Step 3: Commit** (if only comments/constants)
 
@@ -382,7 +384,7 @@ Return **8** phases matching the approved spec (preflight … verify). Use **rea
 - UFW: `ufw status verbose` then allow rules (spec: ssh, 80, 443)
 - Install x-ui: `curl -4fL …/x-ui-linux-$(uname -m | sed …).tar.gz` pattern from upstream (use `amd64` mapping function copied from comments in upstream or `dpkg --print-architecture`)
 - Configure: `${XUI_BIN} setting -username …` (from Task 5)
-- Caddy: install via official deb instructions:
+- reverse proxy (historical): install via official deb instructions:
 
 ```bash
 sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
@@ -392,7 +394,7 @@ sudo apt-get update
 sudo apt-get install -y caddy
 ```
 
-(Exact lines from [Caddy install docs](https://caddyserver.com/docs/install) if these change.)
+(Exact lines from [reverse proxy (historical) install docs](https://caddyserver.com/docs/install) if these change.)
 
 - Caddyfile block:
 
@@ -440,7 +442,7 @@ Run: `bun test apps/server/src/vpn/setupPhases.test.ts`
 
 ```bash
 git add apps/server/src/vpn/setupPhases.ts apps/server/src/vpn/setupPhases.test.ts
-git commit -m "feat(vpn): add ordered 3x-ui + Caddy setup phases"
+git commit -m "feat(vpn): add ordered 3x-ui + reverse proxy (historical) setup phases"
 ```
 
 ---
@@ -667,10 +669,10 @@ git commit -m "feat(web): panel hostname field and setup dry-run terminal output
 | API-driven SSH (B) | Task 7–8 |
 | Global `VPN_SSH_ENABLED` dry-run, no dial | Task 1, 8 |
 | Ubuntu 24 + 3x-ui script/systemd | Task 5–6 (binary path avoids interactive `install.sh`) |
-| Caddy + ACME email global | Task 1, 6 |
+| reverse proxy (historical) + ACME email global | Task 1, 6 |
 | `host` IP + `panelHostname` FQDN | Task 2–3 |
 | Encrypted 3x-ui credentials | Task 4, 8 |
-| Public HTTPS, 3x-ui behind Caddy, ufw 22/80/443 | Task 6 |
+| Public HTTPS, 3x-ui behind reverse proxy (historical), ufw 22/80/443 | Task 6 |
 | 409 when `working` | Task 8 |
 | UI terminal sheet for setup output | Task 9 |
 | SSH host key strict policy | Task 7 (explicit `StrictHostKeyChecking` / known_hosts — fill exact flag when implementing) |

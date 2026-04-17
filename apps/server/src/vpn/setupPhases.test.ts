@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildPanelLoopbackHttpUrl } from "../net/panelAddress";
-import {
-  buildSetupPhases,
-  PLACEHOLDER_ADMIN_PASS,
-  PLACEHOLDER_ADMIN_USER,
-  PLACEHOLDER_SUB_JSON_PATH_DB,
-  PLACEHOLDER_SUB_PATH_DB,
-} from "./setupPhases";
+import { buildSetupPhases, PLACEHOLDER_ADMIN_PASS, PLACEHOLDER_ADMIN_USER } from "./setupPhases";
 
 describe("buildSetupPhases", () => {
   test("includes placeholders and loopback verify URL", () => {
@@ -15,8 +9,6 @@ describe("buildSetupPhases", () => {
       adminUsername: PLACEHOLDER_ADMIN_USER,
       adminPassword: PLACEHOLDER_ADMIN_PASS,
       webBasePath: "ab12cd34ef56gh78ij",
-      subPathDb: PLACEHOLDER_SUB_PATH_DB,
-      subJsonPathDb: PLACEHOLDER_SUB_JSON_PATH_DB,
     });
     expect(phases.length).toBe(5);
     const joined = phases.map((p) => p.script).join("\n");
@@ -27,14 +19,6 @@ describe("buildSetupPhases", () => {
     const expectUrl = buildPanelLoopbackHttpUrl(2053, "ab12cd34ef56gh78ij");
     expect(expectUrl).not.toBeNull();
     expect(joined).toContain(expectUrl!);
-    expect(joined).toContain("/etc/x-ui/x-ui.db");
-    expect(joined).toContain("DELETE FROM settings");
-    expect(joined).toContain("INSERT INTO settings");
-    expect(joined).toContain("subPath");
-    expect(joined).toContain("subJsonPath");
-    expect(joined).toContain("systemctl stop");
-    expect(joined).toContain(PLACEHOLDER_SUB_PATH_DB);
-    expect(joined).toContain(PLACEHOLDER_SUB_JSON_PATH_DB);
   });
 
   test("phase ids are stable", () => {
@@ -43,8 +27,6 @@ describe("buildSetupPhases", () => {
       adminUsername: "u1",
       adminPassword: "p1",
       webBasePath: "xyz",
-      subPathDb: "/s1s1s1s1s1s1s1s1s1/",
-      subJsonPathDb: "/j1j1j1j1j1j1j1j1j1/",
     });
     expect(phases.map((p) => p.id)).toEqual(["preflight", "ufw", "install_xui", "configure_xui", "verify"]);
   });
@@ -55,8 +37,6 @@ describe("buildSetupPhases", () => {
       adminUsername: "u",
       adminPassword: "p",
       webBasePath: "abc",
-      subPathDb: "/s1s1s1s1s1s1s1s1s1/",
-      subJsonPathDb: "/j1j1j1j1j1j1j1j1j1/",
     });
     const verify = phases.find((p) => p.id === "verify");
     expect(verify).toBeDefined();

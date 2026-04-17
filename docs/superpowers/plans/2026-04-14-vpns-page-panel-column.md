@@ -8,6 +8,8 @@
 
 **Tech stack:** Bun, Hono, `bun:sqlite`, React + TanStack Query (existing), TypeScript.
 
+**Deployment note (2026-04-16):** **Panel** links are generic HTTPS URLs to 3x-ui; they **do not** assume **reverse proxy (historical)** as the TLS front-end (see root `AGENTS.md`).
+
 ---
 
 ## File map
@@ -72,7 +74,7 @@ In `apps/server/src/net/panelAddress.ts`, add:
 
 ```ts
 /**
- * HTTPS URL for the 3x-ui panel behind Caddy, matching verify curl in setupPhases.
+ * HTTPS URL for the 3x-ui panel behind reverse proxy (historical), matching verify curl in setupPhases.
  * Returns null if hostname or path is missing/blank.
  */
 export function buildPanelHttpsUrl(panelHostname: string, webBasePath: string | null): string | null {

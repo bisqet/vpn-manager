@@ -3,12 +3,13 @@ import { buildVlessRealityOutbound } from "./buildVlessRealityOutbound";
 
 describe("buildVlessRealityOutbound", () => {
   test("builds vless outbound with vision flow and reality to yahoo.com", () => {
+    const publicKey = Buffer.alloc(32, 5).toString("base64url");
     const o = buildVlessRealityOutbound({
       tag: "vpnmgr-out-test",
       address: "hop2.example.com",
       port: 443,
       uuid: "11111111-1111-4111-8111-111111111111",
-      publicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+      publicKey,
       shortId: "0123456789abcdef",
     });
     expect(o.tag).toBe("vpnmgr-out-test");
@@ -33,7 +34,7 @@ describe("buildVlessRealityOutbound", () => {
     };
     expect(stream.security).toBe("reality");
     expect(stream.realitySettings.serverName).toBe("yahoo.com");
-    expect(stream.realitySettings.publicKey).toBe("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=");
+    expect(stream.realitySettings.publicKey).toBe(publicKey);
     expect(stream.realitySettings.shortId).toBe("0123456789abcdef");
   });
 });

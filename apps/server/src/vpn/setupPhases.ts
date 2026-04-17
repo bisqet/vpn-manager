@@ -1,5 +1,4 @@
 import { buildPanelLoopbackHttpUrl } from "../net/panelAddress";
-import { bashPersistSubscriptionPathsToSqlite, XUI_PANEL_SETTINGS_DB } from "./xuiSubscriptionPaths";
 
 /**
  * Ordered remote setup phases for 3x-ui on Ubuntu 24 (panel bound to loopback).
@@ -18,8 +17,6 @@ export type SetupPhase = {
 export const PLACEHOLDER_ADMIN_USER = "<GENERATED_ADMIN_USERNAME>";
 export const PLACEHOLDER_ADMIN_PASS = "<GENERATED_ADMIN_PASSWORD>";
 export const PLACEHOLDER_WEB_BASE_PATH = "<GENERATED_WEB_BASE_PATH>";
-export const PLACEHOLDER_SUB_PATH_DB = "<GENERATED_SUBSCRIPTION_SUB_PATH>";
-export const PLACEHOLDER_SUB_JSON_PATH_DB = "<GENERATED_SUBSCRIPTION_JSON_PATH>";
 
 export const XUI_BIN = "/usr/local/x-ui/x-ui";
 export const XUI_SYSTEMD = "x-ui";
@@ -29,8 +26,6 @@ export type SetupPhaseContext = {
   adminUsername: string;
   adminPassword: string;
   webBasePath: string;
-  subPathDb: string;
-  subJsonPathDb: string;
 };
 
 function debianArch(): string {
@@ -44,10 +39,9 @@ esac`;
 }
 
 export function buildSetupPhases(ctx: SetupPhaseContext): SetupPhase[] {
-  const { xuiLocalPort, adminUsername, adminPassword, webBasePath, subPathDb, subJsonPathDb } = ctx;
+  const { xuiLocalPort, adminUsername, adminPassword, webBasePath } = ctx;
   const loopbackUrl = buildPanelLoopbackHttpUrl(xuiLocalPort, webBasePath);
   if (loopbackUrl === null) throw new Error("buildSetupPhases: loopback panel URL unexpectedly empty");
-  const sqlitePersist = bashPersistSubscriptionPathsToSqlite(XUI_PANEL_SETTINGS_DB, subPathDb, subJsonPathDb);
 
   const preflight: SetupPhase = {
     id: "preflight",
@@ -106,15 +100,10 @@ systemctl restart ${XUI_SYSTEMD} || true
 
   const configureXui: SetupPhase = {
     id: "configure_xui",
-    title: "Configure 3x-ui (credentials, localhost bind, web base path, subscription URI paths)",
+    title: "Configure 3x-ui (credentials, localhost bind, web base path)",
     script: `set -euo pipefail
 ${XUI_BIN} setting -username '${adminUsername}' -password '${adminPassword}' -port ${xuiLocalPort} -webBasePath '${webBasePath}' -listenIP 127.0.0.1
 systemctl restart ${XUI_SYSTEMD}
-sleep 2
-systemctl is-active --quiet ${XUI_SYSTEMD}
-systemctl stop ${XUI_SYSTEMD}
-${sqlitePersist}
-systemctl start ${XUI_SYSTEMD}
 sleep 2
 systemctl is-active --quiet ${XUI_SYSTEMD}
 `,

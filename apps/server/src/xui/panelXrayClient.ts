@@ -1,4 +1,4 @@
-import { PanelRequestError, panelBaseForProvision } from "./provisionChainClientAccess";
+import { PanelRequestError, withPanelTlsInsecureHttpFallback } from "./provisionChainClientAccess";
 
 export type PanelXrayBundle = { xraySettingText: string; outboundTestUrl: string };
 
@@ -56,35 +56,36 @@ export async function fetchPanelXrayBundle(input: {
   cookieHeader: string;
   fetchFn?: typeof fetch;
 }): Promise<PanelXrayBundle> {
-  const base = panelBaseForProvision(input.panelBaseUrl);
-  const fetchFn = input.fetchFn ?? fetch;
-  const url = `${base}panel/xray/`;
-  const response = await fetchFn(url, {
-    method: "POST",
-    headers: {
-      cookie: input.cookieHeader,
-      accept: "application/json",
-      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-    },
-    body: new URLSearchParams().toString(),
+  return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
+    const fetchFn = input.fetchFn ?? fetch;
+    const url = `${base}panel/xray/`;
+    const response = await fetchFn(url, {
+      method: "POST",
+      headers: {
+        cookie: input.cookieHeader,
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: new URLSearchParams().toString(),
+    });
+    const json = await readPanelJson(response);
+    requireSuccess(json, "fetch panel xray failed");
+    if (typeof json.obj !== "string") {
+      throw new PanelRequestError("panel xray response obj must be a string");
+    }
+    const inner = parseXrayPanelObjString(json.obj);
+    if (!("xraySetting" in inner)) {
+      throw new PanelRequestError("panel xray obj missing xraySetting");
+    }
+    const outboundTestUrl =
+      typeof inner.outboundTestUrl === "string" && inner.outboundTestUrl !== ""
+        ? inner.outboundTestUrl
+        : DEFAULT_OUTBOUND_TEST_URL;
+    return {
+      xraySettingText: JSON.stringify(inner.xraySetting),
+      outboundTestUrl,
+    };
   });
-  const json = await readPanelJson(response);
-  requireSuccess(json, "fetch panel xray failed");
-  if (typeof json.obj !== "string") {
-    throw new PanelRequestError("panel xray response obj must be a string");
-  }
-  const inner = parseXrayPanelObjString(json.obj);
-  if (!("xraySetting" in inner)) {
-    throw new PanelRequestError("panel xray obj missing xraySetting");
-  }
-  const outboundTestUrl =
-    typeof inner.outboundTestUrl === "string" && inner.outboundTestUrl !== ""
-      ? inner.outboundTestUrl
-      : DEFAULT_OUTBOUND_TEST_URL;
-  return {
-    xraySettingText: JSON.stringify(inner.xraySetting),
-    outboundTestUrl,
-  };
 }
 
 export async function updatePanelXraySetting(input: {
@@ -94,24 +95,25 @@ export async function updatePanelXraySetting(input: {
   outboundTestUrl: string;
   fetchFn?: typeof fetch;
 }): Promise<void> {
-  const base = panelBaseForProvision(input.panelBaseUrl);
-  const fetchFn = input.fetchFn ?? fetch;
-  const url = `${base}panel/xray/update`;
-  const body = new URLSearchParams({
-    xraySetting: input.xraySettingText,
-    outboundTestUrl: input.outboundTestUrl,
+  return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
+    const fetchFn = input.fetchFn ?? fetch;
+    const url = `${base}panel/xray/update`;
+    const body = new URLSearchParams({
+      xraySetting: input.xraySettingText,
+      outboundTestUrl: input.outboundTestUrl,
+    });
+    const response = await fetchFn(url, {
+      method: "POST",
+      headers: {
+        cookie: input.cookieHeader,
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      },
+      body: body.toString(),
+    });
+    const json = await readPanelJson(response);
+    requireSuccess(json, "update panel xray failed");
   });
-  const response = await fetchFn(url, {
-    method: "POST",
-    headers: {
-      cookie: input.cookieHeader,
-      accept: "application/json",
-      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-    },
-    body: body.toString(),
-  });
-  const json = await readPanelJson(response);
-  requireSuccess(json, "update panel xray failed");
 }
 
 export async function restartPanelXrayService(input: {
@@ -119,16 +121,17 @@ export async function restartPanelXrayService(input: {
   cookieHeader: string;
   fetchFn?: typeof fetch;
 }): Promise<void> {
-  const base = panelBaseForProvision(input.panelBaseUrl);
-  const fetchFn = input.fetchFn ?? fetch;
-  const url = `${base}panel/api/server/restartXrayService`;
-  const response = await fetchFn(url, {
-    method: "POST",
-    headers: {
-      cookie: input.cookieHeader,
-      accept: "application/json",
-    },
+  return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
+    const fetchFn = input.fetchFn ?? fetch;
+    const url = `${base}panel/api/server/restartXrayService`;
+    const response = await fetchFn(url, {
+      method: "POST",
+      headers: {
+        cookie: input.cookieHeader,
+        accept: "application/json",
+      },
+    });
+    const json = await readPanelJson(response);
+    requireSuccess(json, "restart xray service failed");
   });
-  const json = await readPanelJson(response);
-  requireSuccess(json, "restart xray service failed");
 }

@@ -18,9 +18,9 @@
 - **Roles** beyond “any signed-in user”: same authorization model as other authed routes unless the product adds admin roles later.
 - **Key–value** or **JSON blob** settings store for arbitrary keys (fixed columns for v1; new keys add migrations).
 
-## Relationship to existing SSH / Caddy work
+## Relationship to existing SSH / reverse proxy (historical) work
 
-The feature in `2026-04-14-3x-ui-api-ssh-setup-design.md` describes **Caddy** using a **global ACME contact** and **`VPN_SSH_ENABLED`** as a kill-switch. This spec **does not change** remote phased behavior; it only changes **where** the API reads **`acme_email`**, **`vpn_ssh_enabled`**, and **`ssh_known_hosts_file`** after bootstrap: **from `app_settings`**, not from a long-lived in-memory copy of env alone.
+The feature in `2026-04-14-3x-ui-api-ssh-setup-design.md` describes **reverse proxy (historical)** using a **global ACME contact** and **`VPN_SSH_ENABLED`** as a kill-switch. This spec **does not change** remote phased behavior; it only changes **where** the API reads **`acme_email`**, **`vpn_ssh_enabled`**, and **`ssh_known_hosts_file`** after bootstrap: **from `app_settings`**, not from a long-lived in-memory copy of env alone. **Project note:** reverse proxy (historical) is **out of scope** for intended deployments; **`acme_email`** remains a general ACME contact field for any code paths that still consume it.
 
 ## Data model
 

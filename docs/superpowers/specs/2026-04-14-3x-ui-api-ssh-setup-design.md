@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-14  
 **Status:** Draft pending reader review  
-**Scope:** VPN profile setup that installs and hardens **3x-ui** on **Ubuntu 24.04 LTS**, terminates **HTTPS** with **Caddy** (Let’s Encrypt), and verifies health. **SSH is executed only from the VPN Manager API** (not from the browser). Supersedes the “real SSH” open follow-up in `2026-04-14-vpn-profile-setup-ssh-placeholder-design.md` for this feature area.
+**Scope:** VPN profile setup that installs and hardens **3x-ui** on **Ubuntu 24.04 LTS**, terminates **HTTPS** with **reverse proxy (historical)** (Let’s Encrypt), and verifies health. **SSH is executed only from the VPN Manager API** (not from the browser). Supersedes the “real SSH” open follow-up in `2026-04-14-vpn-profile-setup-ssh-placeholder-design.md` for this feature area.
 
 ## Goals
 
@@ -10,17 +10,17 @@
 2. **Global kill-switch:** when disabled, the API **must not** initiate TCP connections to the profile host (no SSH dial). It returns a **structured dry-run** (ordered phases + command text) suitable for display in the existing **terminal-style sheet**.
 3. **Target OS:** **Ubuntu 24.04 LTS** on the remote host.
 4. **3x-ui:** install via the **official install script**, managed with **systemd** on the host.
-5. **Panel access:** **public HTTPS** using **Caddy** with **built-in ACME** (no Certbot). **`ACME_EMAIL`** is a **single global** environment variable on the VPN Manager server.
+5. **Panel access:** **public HTTPS** using **reverse proxy (historical)** with **built-in ACME** (no Certbot). **`ACME_EMAIL`** is a **single global** environment variable on the VPN Manager server.
 6. **DNS / SSH split:** **`host` may be a raw IP** for SSH. **`panelHostname`** is a separate **FQDN** used for TLS/SNI and Let’s Encrypt; it must be suitable for **HTTP-01** validation.
 7. **Credentials:** **generate** strong **3x-ui admin** credentials (and any additional secrets required for a complete automated baseline) and **store them encrypted at rest** in SQLite, using the same general approach as the existing **SSH password** encryption (master key + per-row nonce/ciphertext).
-8. **Security posture:** 3x-ui **admin UI not directly exposed on the public internet**; **Caddy** listens on **80/443** and reverse-proxies to **localhost**-bound 3x-ui. **`ufw`:** default deny, allow **SSH + 80 + 443** for this milestone (document additional VPN protocol ports as a later concern).
+8. **Security posture:** 3x-ui **admin UI not directly exposed on the public internet**; **reverse proxy (historical)** listens on **80/443** and reverse-proxies to **localhost**-bound 3x-ui. **`ufw`:** default deny, allow **SSH + 80 + 443** for this milestone (document additional VPN protocol ports as a later concern).
 9. **One-shot setup:** if `operationalStatus === "working"`, **normal Setup is blocked** (`409 Conflict`) until a future **reset/rebuild** endpoint exists. No silent re-run that rotates secrets.
 
 ## Non-goals (this spec)
 
 - Implementing the **reset/rebuild** API (only reserved behavior and name).
 - Opening a **real interactive shell** in the browser; the UI remains a **presentation** of API output (dry-run or streamed logs).
-- **Certbot** on the Caddy path (Caddy handles issuance and renewal).
+- **Certbot** on the reverse proxy (historical) path (reverse proxy (historical) handles issuance and renewal).
 - Defining every **xray inbound** port and protocol matrix; firewall beyond **SSH/80/443** is explicitly deferred unless required for the health check itself.
 
 ## Architecture
@@ -37,7 +37,7 @@
 |--------|---------|--------|
 | SSH target | Existing `host` | May be **IPv4/IPv6 literal** or hostname. |
 | SSH port / user / password | Existing columns | Password stays encrypted as today. |
-| Panel TLS name | **`panelHostname`** `TEXT NOT NULL` (or nullable until first setup — pick one in implementation; recommended **NOT NULL** when `VPN_SSH_ENABLED` execution path is used, validated as FQDN) | Used only for **Caddy + ACME + HTTPS checks**. |
+| Panel TLS name | **`panelHostname`** `TEXT NOT NULL` (or nullable until first setup — pick one in implementation; recommended **NOT NULL** when `VPN_SSH_ENABLED` execution path is used, validated as FQDN) | Used only for **reverse proxy (historical) + ACME + HTTPS checks**. |
 | 3x-ui secrets | **Encrypted blob** (ciphertext + nonce columns, or one JSON ciphertext) | At minimum **admin username + password**; version field inside decrypted payload allowed. |
 | Operator diagnostics (optional) | **`last_setup_error`** `TEXT NULL`, **`last_setup_at`** `TEXT NULL` (or reuse timestamps) | **Never** store secrets. Clear on successful setup. |
 
@@ -53,7 +53,7 @@ If distinguishing **“dry-run only”** from **“attempted live and failed”*
 | Variable | Purpose |
 |----------|---------|
 | **`VPN_SSH_ENABLED`** | If not truthy: **no outbound SSH**; `POST .../setup` returns **dry-run only**. |
-| **`ACME_EMAIL`** | Required when executing live setup with Caddy/LE (validate before SSH). |
+| **`ACME_EMAIL`** | Required when executing live setup with reverse proxy (historical)/LE (validate before SSH). |
 
 ## Remote workflow (phased)
 
@@ -64,7 +64,7 @@ Each phase has a stable **id**, **title**, and **script snippet** (for dry-run d
 3. **Install 3x-ui:** official non-interactive path; enable **systemd** unit(s) per upstream.
 4. **Configure 3x-ui:** set generated admin credentials via **supported non-interactive** mechanism (exact command/API depends on 3x-ui; document chosen method in implementation). Apply **hardening** that can be automated; remaining items become a short **operator checklist** in runbooks if not scriptable.
 5. **Bind 3x-ui to localhost** on internal panel port (exact port per upstream default, e.g. common defaults — verify at implementation time).
-6. **Install Caddy** (supported method for Ubuntu 24); write **Caddyfile** for **`panelHostname`** → `reverse_proxy` to local 3x-ui; use **`ACME_EMAIL`** for issuer contact.
+6. **Install reverse proxy (historical)** (supported method for Ubuntu 24); write **Caddyfile** for **`panelHostname`** → `reverse_proxy` to local 3x-ui; use **`ACME_EMAIL`** for issuer contact.
 7. **Reload/restart** services in a safe order; **`systemctl is-active`** checks.
 8. **Verification:** HTTPS request to `https://panelHostname/...` (minimal path), plus local upstream check if needed; both must pass before **`working`**.
 
@@ -92,7 +92,7 @@ Each phase has a stable **id**, **title**, and **script snippet** (for dry-run d
 
 - **SSH host keys:** **Strict verification** — no “trust on first use” without an explicit decision. **Default for v1:** document operators supplying **known_hosts entries** or a **future `sshHostKey`** profile field; implementation chooses the minimal shippable behavior and documents it (e.g. fail setup if host key not pinned when a certain flag is set).
 - **Secrets:** decrypt **only in memory** during live setup; redact in logs; cap stdout/stderr capture size.
-- **TLS:** only on **`panelHostname`** via Caddy; 3x-ui reachable from the internet **only** through Caddy.
+- **TLS:** only on **`panelHostname`** via reverse proxy (historical); 3x-ui reachable from the internet **only** through reverse proxy (historical).
 
 ## Reliability
 

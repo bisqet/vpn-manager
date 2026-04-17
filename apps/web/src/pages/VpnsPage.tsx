@@ -168,6 +168,12 @@ function fetchPanelLogin(profileId: number) {
   return apiFetch<PanelLoginResponse>(`/api/profiles/${profileId}/panel-login`);
 }
 
+function requestPanelReachabilityCheck(profileId: number) {
+  return apiFetch<VpnProfile>(`/api/profiles/${profileId}/panel-reachability-check`, {
+    method: "POST",
+  });
+}
+
 function getInitialValues(modalState: ModalState): ProfileFormValues {
   if (!modalState || modalState.mode === "create") {
     return emptyFormValues;
@@ -292,6 +298,52 @@ function hasValidationError(
   result: ReturnType<typeof validateFormValues>,
 ): result is { error: string } {
   return "error" in result;
+}
+
+function PanelReachabilityRefreshIcon() {
+  return (
+    <svg
+      aria-hidden
+      focusable="false"
+      height={14}
+      viewBox="0 0 24 24"
+      width={14}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M3 3v5h5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M16 21h5v-5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+    </svg>
+  );
 }
 
 function ClipboardIcon() {
@@ -896,6 +948,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const [clearServerActionError, setClearServerActionError] = useState<string | null>(null);
   const [panelCopyError, setPanelCopyError] = useState<string | null>(null);
   const [panelCopySuccess, setPanelCopySuccess] = useState<string | null>(null);
+  const [panelProbeError, setPanelProbeError] = useState<string | null>(null);
   /** Per-profile refcount so parallel username+password copies for one row do not clear loading early. */
   const [panelLoginBusyById, setPanelLoginBusyById] = useState<Record<number, number>>({});
   const panelLoginCache = useRef(new Map<number, PanelLoginResponse>());
@@ -968,6 +1021,19 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
           ? { ...prev, profile: data.profile }
           : prev,
       );
+    },
+  });
+
+  const panelReachabilityCheckMutation = useMutation({
+    mutationFn: requestPanelReachabilityCheck,
+    onMutate: () => {
+      setPanelProbeError(null);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
+    },
+    onError: (err) => {
+      setPanelProbeError(getErrorMessage(err));
     },
   });
 
@@ -1221,6 +1287,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         {clearServerActionError ? <div style={errorStyle}>{clearServerActionError}</div> : null}
         {panelCopyError ? <div style={errorStyle}>{panelCopyError}</div> : null}
         {panelCopySuccess ? <div style={inlineSuccessStyle}>{panelCopySuccess}</div> : null}
+        {panelProbeError ? <div style={errorStyle}>{panelProbeError}</div> : null}
 
         {profilesQuery.isPending ? (
           <div style={emptyStateStyle}>Loading servers...</div>
@@ -1255,6 +1322,10 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                     (setupMutation.isPending && setupMutation.variables === profile.id) ||
                     (setupTerminalProfile?.id === profile.id && !setupTerminalRunFinished);
                   const panelLoginBusy = (panelLoginBusyById[profile.id] ?? 0) > 0;
+                  const panelRecheckBusy =
+                    profile.panelReachability === "checking" ||
+                    (panelReachabilityCheckMutation.isPending &&
+                      panelReachabilityCheckMutation.variables === profile.id);
 
                   return (
                     <tr key={profile.id}>
@@ -1320,22 +1391,39 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                           ) : (
                             <span style={statusPendingStyle}>Pending</span>
                           )}
-                          <span
-                            style={panelReachabilityStyle}
-                            title={
-                              profile.panelReachability === "unreachable" && profile.panelReachabilityDetail
-                                ? profile.panelReachabilityDetail
-                                : undefined
-                            }
-                          >
-                            {profile.panelReachability === "checking"
-                              ? "Panel: checking…"
-                              : profile.panelReachability === "reachable"
-                                ? "Panel: OK"
-                                : profile.panelReachability === "unreachable"
-                                  ? "Panel: unreachable"
-                                  : "Panel: not checked"}
-                          </span>
+                          <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "6px" }}>
+                            <span
+                              style={panelReachabilityStyle}
+                              title={
+                                profile.panelReachability === "unreachable" && profile.panelReachabilityDetail
+                                  ? profile.panelReachabilityDetail
+                                  : undefined
+                              }
+                            >
+                              {profile.panelReachability === "checking"
+                                ? "Panel: checking…"
+                                : profile.panelReachability === "reachable"
+                                  ? "Panel: OK"
+                                  : profile.panelReachability === "unreachable"
+                                    ? "Panel: unreachable"
+                                    : "Panel: not checked"}
+                            </span>
+                            {authUser ? (
+                              <button
+                                aria-busy={panelRecheckBusy}
+                                aria-label={`Recheck panel HTTPS reachability for ${profile.label}`}
+                                disabled={panelRecheckBusy}
+                                onClick={() => {
+                                  panelReachabilityCheckMutation.mutate(profile.id);
+                                }}
+                                style={panelReachabilityRefreshButtonStyle}
+                                title="Check panel now"
+                                type="button"
+                              >
+                                <PanelReachabilityRefreshIcon />
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                       </td>
                       <td style={tableBodyCellStyle}>
@@ -1856,6 +1944,19 @@ const iconButtonStyle: CSSProperties = {
   background: "#ffffff",
   color: "#111827",
   borderColor: "#d1d5db",
+};
+
+const panelReachabilityRefreshButtonStyle: CSSProperties = {
+  ...baseButtonStyle,
+  padding: "2px 4px",
+  minWidth: "auto",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 0,
+  background: "#ffffff",
+  color: "#6b7280",
+  borderColor: "#e5e7eb",
 };
 
 const ghostButtonStyle: CSSProperties = {

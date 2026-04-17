@@ -42,7 +42,7 @@ function pathnameToSingleSegment(pathname: string): string | null {
 export function parseInstallShCredentials(
   plainTranscript: string,
   panelHostname: string,
-): { adminUsername: string; adminPassword: string; webBasePath: string } | null {
+): { adminUsername: string; adminPassword: string; webBasePath: string; panelPort: number | null } | null {
   const stripped = stripAnsi(plainTranscript);
   if (!stripped.includes(ANCHOR)) {
     return null;
@@ -81,5 +81,15 @@ export function parseInstallShCredentials(
     return null;
   }
 
-  return { adminUsername, adminPassword, webBasePath };
+  const portStr = url.port;
+  let panelPort: number | null = null;
+  if (portStr !== "") {
+    const p = Number(portStr);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) {
+      return null;
+    }
+    panelPort = p;
+  }
+
+  return { adminUsername, adminPassword, webBasePath, panelPort };
 }

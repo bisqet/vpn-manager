@@ -4,9 +4,11 @@
 **Status:** Approved for implementation planning  
 **Scope:** VPN profile `panel_hostname` semantics, API validation (`apps/server/src/types.ts`, `apps/server/src/routes/profiles.ts`), web form (`apps/web/src/pages/VpnsPage.tsx`), remote setup scripts (`apps/server/src/vpn/setupPhases.ts`), setup preconditions (`apps/server/src/vpn/setupRunner.ts`), and tests.
 
+**Deployment note (2026-04-16):** This workspace’s **product intent** is **not** to use **reverse proxy (historical)**. Validation and URL-building in this spec remain relevant; Caddyfile / reverse proxy (historical) ACME language below reflects an **earlier phased-setup** model and must **not** be read as requiring reverse proxy (historical) for TLS going forward.
+
 ## Goal
 
-1. Allow the **panel TLS identifier** (stored in `panel_hostname`) to be either a **FQDN** (current behavior) **or** a **public IPv4 / public IPv6** literal, so Caddy can obtain and serve certificates appropriate to that identifier (including **Let’s Encrypt IP certificates** where supported by the installed Caddy and CA policy).
+1. Allow the **panel TLS identifier** (stored in `panel_hostname`) to be either a **FQDN** (current behavior) **or** a **public IPv4 / public IPv6** literal, so reverse proxy (historical) can obtain and serve certificates appropriate to that identifier (including **Let’s Encrypt IP certificates** where supported by the installed reverse proxy (historical) and CA policy).
 2. When **SSH `host` is a public IP literal**, allow **omitting** `panelHostname` on create/update; the server **sets `panel_hostname` from `host`** (normalization applied). When **`host` is not** a public IP literal, **`panelHostname` is required** and must be a **FQDN or public IP** (never derived from a non-public `host`).
 3. **No DNS resolution** of `host` for derivation: only **syntactic** classification of `host` as a public IP. A **hostname** SSH target never auto-fills the panel field, even if it publicly resolves.
 
@@ -14,7 +16,7 @@
 
 - Supporting **private-IP-only** HTTPS or ACME inside LANs without a public identifier.
 - Changing **SSH** connection semantics (`host` may remain hostname, IP, or other forms accepted today).
-- **Guaranteeing** ACME success for every IP or network; only **shaping config and validation** so the happy path is possible when Caddy + CA support IP identifiers on the server.
+- **Guaranteeing** ACME success for every IP or network; only **shaping config and validation** so the happy path is possible when reverse proxy (historical) + CA support IP identifiers on the server.
 - Renaming the **database column** `panel_hostname` (optional UI copy only).
 
 ## Product / UX
@@ -55,16 +57,16 @@
 
 ## Remote setup (`setupPhases`)
 
-- **Caddy site block:** emit the site address Caddy expects:
+- **reverse proxy (historical) site block:** emit the site address reverse proxy (historical) expects:
   - **FQDN:** `example.com { ... }` (unchanged).
   - **IPv4:** `203.0.113.1 { ... }`.
-  - **IPv6:** bracketed form if required by Caddy for site keys (e.g. `[2001:db8::1] { ... }`) — **must be verified against Caddyfile documentation** for the minimum Caddy version we support.
-- **Global / `tls` options:** if Let’s Encrypt **IP certificates** require a **short-lived / ACME profile** in Caddy, add the minimal global or site-level directives **documented for that Caddy release** during implementation (do not guess unsupported directives in this spec).
+  - **IPv6:** bracketed form if required by reverse proxy (historical) for site keys (e.g. `[2001:db8::1] { ... }`) — **must be verified against Caddyfile documentation** for the minimum reverse proxy (historical) version we support.
+- **Global / `tls` options:** if Let’s Encrypt **IP certificates** require a **short-lived / ACME profile** in reverse proxy (historical), add the minimal global or site-level directives **documented for that reverse proxy (historical) release** during implementation (do not guess unsupported directives in this spec).
 - **Verify phase:** `curl` to `https://<panel>/...` with correct URL host formatting (**IPv6 URL host must use `[]`**).
 
 ## Runtime assumptions (ops)
 
-- Target VPS **Caddy** package must be **new enough** to cooperate with **Let’s Encrypt IP issuance** (IP certs are **short-lived**; renewal must succeed on a short cadence). Implementation phase should record **minimum tested Caddy version** in code comments or AGENTS.md if needed.
+- Target VPS **reverse proxy (historical)** package must be **new enough** to cooperate with **Let’s Encrypt IP issuance** (IP certs are **short-lived**; renewal must succeed on a short cadence). Implementation phase should record **minimum tested reverse proxy (historical) version** in code comments or AGENTS.md if needed.
 - **Ports 80/443** remain required for the default ACME path unless we later add alternatives.
 
 ## Testing

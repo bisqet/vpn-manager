@@ -1,11 +1,21 @@
+import { randomBytes } from "node:crypto";
 import { runPromptDriver } from "./installShPromptDriver";
-import { randomXuiAlnum } from "./xuiRandom";
 
 /** Distinct from normal shell output so we can complete the expect driver. */
 export const VPNMGR_RECOVER_MARKER_AFTER_SHOW = "__VPNMGR_RECOVER_AFTER_SHOW__";
 export const VPNMGR_RECOVER_MARKER_AFTER_SET = "__VPNMGR_RECOVER_AFTER_SET__";
 
 const XUI_CLI = "/usr/local/x-ui/x-ui";
+
+function randomAlnum(length: number): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = randomBytes(length);
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += chars[bytes[i]! % chars.length]!;
+  }
+  return out;
+}
 
 /**
  * Parses the last `webBasePath:` line from `x-ui setting -show true` style output
@@ -85,8 +95,8 @@ export async function recoverPanelSecretsWhenNoInstallBanner(
   }
   const panelPort = parsePanelPortFromLastSettingShowOutput(fullPlain, VPNMGR_RECOVER_MARKER_AFTER_SHOW);
 
-  const adminUsername = randomXuiAlnum(10);
-  const adminPassword = randomXuiAlnum(16);
+  const adminUsername = randomAlnum(10);
+  const adminPassword = randomAlnum(16);
 
   const setDriver = await runPromptDriver({
     write: (s) => write(s),

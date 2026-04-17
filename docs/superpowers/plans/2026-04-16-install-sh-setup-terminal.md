@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace phased remote `buildSetupPhases` setup with **upstream `install.sh`**, driven over **`ssh2` shell + PTY** on `GET /api/profiles/:id/setup-terminal`, using an **expect-style** prompt driver, **SSH-parity** resize + (ignored-during-automation) keystrokes from the browser, and **transcript parsing (choice A)** for credentials. **Dry-run** when `vpnSshEnabled` is false must still return a useful JSON shape without claiming obsolete Caddy/UFW steps.
+**Goal:** Replace phased remote `buildSetupPhases` setup with **upstream `install.sh`**, driven over **`ssh2` shell + PTY** on `GET /api/profiles/:id/setup-terminal`, using an **expect-style** prompt driver, **SSH-parity** resize + (ignored-during-automation) keystrokes from the browser, and **transcript parsing (choice A)** for credentials. **Dry-run** when `vpnSshEnabled` is false must still return a useful JSON shape without claiming obsolete reverse proxy (historical)/UFW steps.
 
 **Architecture:** New focused modules (`ptyText`, `installShTranscriptParser`, `installShPromptDriver`, `runInstallShSetupSession`) encapsulate ANSI handling, regex extraction for the “Panel Installation Complete” banner, and ordered prompt rules. `profileSetupTerminalBridge.ts` switches from `exec`+phase loop to **`shell`** + driver + DB encrypt like `setupLivePhaseLoop` today. **`setupComplete`** is sent as a **WebSocket text** frame (already supported in `tryConsumeSetupCompleteJson` in `VpnsPage.tsx`) after PTY output stops, so xterm is not corrupted.
 
@@ -263,7 +263,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MHSanaei/3x-ui/master/instal
 
 **Placeholder scan:** None intentional.
 
-**Gap:** `executeProfileTeardown` may still reference Caddy paths in `setupPhases`-like strings — out of scope for this plan; add follow-up if `rg caddy` in teardown breaks.
+**Gap:** `executeProfileTeardown` may still reference reverse proxy (historical) paths in `setupPhases`-like strings — out of scope for this plan; add follow-up if teardown scripts still assume removed phased-setup paths.
 
 ---
 

@@ -1,7 +1,8 @@
 const X25519_PKCS8_PREFIX_LEN = 16;
 
-function bytesToStdBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+/** Xray decodes REALITY keys with `base64.RawURLEncoding` (URL-safe, no padding). */
+function bytesToRealityKeyB64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64url");
 }
 
 function extractX25519SeedFromPkcs8(pkcs8: Uint8Array): Uint8Array {
@@ -48,7 +49,7 @@ export async function generateRealityClientMaterial(): Promise<RealityClientMate
     clientUuid: crypto.randomUUID(),
     subId: randomSubId(16),
     shortId: randomRealityShortId(),
-    realityPrivateKeyB64: bytesToStdBase64(seed),
-    realityPublicKeyB64: bytesToStdBase64(pubRaw),
+    realityPrivateKeyB64: bytesToRealityKeyB64(seed),
+    realityPublicKeyB64: bytesToRealityKeyB64(pubRaw),
   };
 }

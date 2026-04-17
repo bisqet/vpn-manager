@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildPanelHttpsUrl,
-  caddySiteAddressKey,
+  buildPanelLoopbackHttpUrl,
   httpsUrlHost,
   isPublicIpLiteral,
   resolvePanelHostname,
@@ -45,11 +45,22 @@ describe("resolvePanelHostname", () => {
   });
 });
 
-describe("caddySiteAddressKey / httpsUrlHost", () => {
+describe("httpsUrlHost", () => {
   test("brackets public IPv6", () => {
     const pub = "2001:4860:4860::8888";
-    expect(caddySiteAddressKey(pub)).toBe("[2001:4860:4860::8888]");
     expect(httpsUrlHost(pub)).toBe("[2001:4860:4860::8888]");
+  });
+});
+
+describe("buildPanelLoopbackHttpUrl", () => {
+  test("returns null for bad port or path", () => {
+    expect(buildPanelLoopbackHttpUrl(2053, null)).toBeNull();
+    expect(buildPanelLoopbackHttpUrl(2053, "")).toBeNull();
+    expect(buildPanelLoopbackHttpUrl(0, "a")).toBeNull();
+  });
+  test("normalizes path", () => {
+    expect(buildPanelLoopbackHttpUrl(2053, "abc")).toBe("http://127.0.0.1:2053/abc/");
+    expect(buildPanelLoopbackHttpUrl(2053, "/abc")).toBe("http://127.0.0.1:2053/abc/");
   });
 });
 
@@ -72,5 +83,19 @@ describe("buildPanelHttpsUrl", () => {
   });
   test("public IPv6 panel brackets host", () => {
     expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p")).toBe("https://[2001:4860:4860::8888]/p/");
+  });
+  test("includes explicit non-443 port for direct x-ui listener", () => {
+    expect(buildPanelHttpsUrl("203.0.113.55", "xUiDocBase18char", 45543)).toBe(
+      "https://203.0.113.55:45543/xUiDocBase18char/",
+    );
+  });
+  test("omits port for null or 443", () => {
+    expect(buildPanelHttpsUrl("panel.example.com", "p", null)).toBe("https://panel.example.com/p/");
+    expect(buildPanelHttpsUrl("panel.example.com", "p", 443)).toBe("https://panel.example.com/p/");
+  });
+  test("IPv6 with explicit port", () => {
+    expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p", 8443)).toBe(
+      "https://[2001:4860:4860::8888]:8443/p/",
+    );
   });
 });

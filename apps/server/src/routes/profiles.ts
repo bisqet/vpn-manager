@@ -540,6 +540,42 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     return c.json(toProfileDto(updated!, patchSessionUserId));
   });
 
+  app.post("/:id/panel-reachability-check", async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) {
+      return c.json({ error: "Invalid profile id" }, 400);
+    }
+
+    const token = getCookie(c, SESSION_COOKIE);
+    const userId = getSessionUserId(db, token);
+    if (userId === null) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const existing = getProfileById(db, id);
+    if (!existing) {
+      return c.json({ error: "Profile not found" }, 404);
+    }
+
+    db.query(
+      `UPDATE vpn_profiles SET
+        panel_reachability = 'checking',
+        panel_reachability_detail = NULL,
+        panel_reachability_checked_at = NULL,
+        updated_at = datetime('now')
+      WHERE id = ?`,
+    ).run(id);
+
+    if (options.reachabilityProbeRunner) {
+      await Promise.resolve(runReachability({ db, profileId: id }));
+    } else {
+      schedulePanelReachabilityProbe({ db, profileId: id });
+    }
+
+    const row = getProfileById(db, id);
+    return c.json(toProfileDto(row as VpnProfileRow, userId));
+  });
+
   function deleteVpnProfileWithHopCleanup(db: Database, id: number) {
     const affectedRows = db
       .query<{ chain_id: number }, [number]>("SELECT DISTINCT chain_id FROM chain_hops WHERE vpn_profile_id = ?")

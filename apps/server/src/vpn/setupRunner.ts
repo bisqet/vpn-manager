@@ -31,6 +31,7 @@ export type ProfileSetupRow = {
   xui_secrets_ciphertext: Uint8Array | null;
   xui_secrets_nonce: Uint8Array | null;
   xui_web_base_path: string | null;
+  xui_panel_port: number | null;
   last_setup_error: string | null;
   last_setup_at: string | null;
   created_at: string;
@@ -60,6 +61,7 @@ function getProfileForSetup(db: Database, id: number): ProfileSetupRow | null {
           xui_secrets_ciphertext,
           xui_secrets_nonce,
           xui_web_base_path,
+          xui_panel_port,
           last_setup_error,
           last_setup_at,
           created_at,

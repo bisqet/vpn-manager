@@ -17,7 +17,18 @@ describe("parseInstallShCredentials", () => {
       adminUsername: "Ab12cdEfGh",
       adminPassword: "Xy9zSecret01",
       webBasePath: "webpath123456789012",
+      panelPort: 8443,
     });
+  });
+
+  test("panelPort is null when Access URL has no explicit port", () => {
+    const noPortUrl = sample.replace(
+      "Access URL: https://panel.example.com:8443/webpath123456789012",
+      "Access URL: https://panel.example.com/webpath123456789012",
+    );
+    const r = parseInstallShCredentials(noPortUrl, "panel.example.com");
+    expect(r).not.toBeNull();
+    expect(r!.panelPort).toBeNull();
   });
 
   test("returns null when URL host does not match panel hostname", () => {

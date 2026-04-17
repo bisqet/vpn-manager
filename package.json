@@ -9,10 +9,15 @@
     "build:web": "bun --cwd apps/web build",
     "start": "bun --cwd apps/server start",
     "test": "bun test apps/server",
-    "test:web": "bun --cwd apps/web test"
+    "test:web": "bun --cwd apps/web test",
+    "vless-test": "bun scripts/vless-test.ts",
+    "download-xray": "bun scripts/download-xray.ts"
   },
   "workspaces": ["apps/*"],
   "dependencies": {
     "kill-port": "^2.0.1"
+  },
+  "devDependencies": {
+    "fflate": "^0.8.2"
   }
 }

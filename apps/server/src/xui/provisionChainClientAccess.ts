@@ -1,5 +1,3 @@
-import { appendAgentSessionLog } from "../debug/agentDebugLog";
-
 export type ChainClientAccessResult = { vlessShareLink: string; subscriptionUrl: string };
 
 export type ProvisionChainClientAccessInput = {
@@ -138,33 +136,49 @@ export async function fetchInboundUsedPorts(input: {
     const port = typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number(portRaw) : NaN;
     if (Number.isFinite(port) && port > 0 && port <= 65535) used.add(Math.trunc(port));
   }
-  if (process.env.VPN_MANAGER_AGENT_DEBUG?.trim() === "1") {
-    appendAgentSessionLog({
-      sessionId: "ac8c04",
-      timestamp: Date.now(),
-      location: "provisionChainClientAccess.ts:fetchInboundUsedPorts",
-      message: "inbounds_list_ports",
-      hypothesisId: "H-parse",
-      data: {
-        usedCount: used.size,
-        objKind: typeof json.obj,
-        parsedArray: Array.isArray(rows),
-      },
-    });
-  }
   return used;
 }
 
-/** Prefer 443, then common alternates, then high ports. */
-export function pickFreeListenPort(usedPorts: ReadonlySet<number>): number {
-  if (!usedPorts.has(443)) return 443;
-  for (let p = 8443; p <= 8999; p++) {
-    if (!usedPorts.has(p)) return p;
+const LISTEN_PORT_RANGES: readonly [number, number][] = [
+  [443, 443],
+  [8443, 8999],
+  [30000, 32000],
+];
+
+function countFreeListenPorts(usedPorts: ReadonlySet<number>): number {
+  let n = 0;
+  for (const [lo, hi] of LISTEN_PORT_RANGES) {
+    for (let p = lo; p <= hi; p++) {
+      if (!usedPorts.has(p)) n++;
+    }
   }
-  for (let p = 30000; p <= 32000; p++) {
-    if (!usedPorts.has(p)) return p;
+  return n;
+}
+
+function kthFreeListenPort(usedPorts: ReadonlySet<number>, k: number): number {
+  for (const [lo, hi] of LISTEN_PORT_RANGES) {
+    for (let p = lo; p <= hi; p++) {
+      if (usedPorts.has(p)) continue;
+      if (k === 0) return p;
+      k--;
+    }
   }
   throw new PanelRequestError("no free listen port found for new inbound");
+}
+
+function randomUintBelow(maxExclusive: number): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0]! % maxExclusive;
+}
+
+/** Uniform random free TCP listen port from 443, 8443–8999, or 30000–32000. */
+export function pickFreeListenPort(usedPorts: ReadonlySet<number>): number {
+  const total = countFreeListenPorts(usedPorts);
+  if (total === 0) {
+    throw new PanelRequestError("no free listen port found for new inbound");
+  }
+  return kthFreeListenPort(usedPorts, randomUintBelow(total));
 }
 
 function parseSubIdFromInboundBody(inboundBody: Record<string, unknown>): string {

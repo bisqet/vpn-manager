@@ -46,6 +46,7 @@ function getProfileForTeardown(db: Database, id: number): ProfileSetupRow | null
           xui_secrets_ciphertext,
           xui_secrets_nonce,
           xui_web_base_path,
+          xui_panel_port,
           last_setup_error,
           last_setup_at,
           created_at,
@@ -155,6 +156,7 @@ export async function executeProfileTeardown(options: {
       xui_secrets_ciphertext = NULL,
       xui_secrets_nonce = NULL,
       xui_web_base_path = NULL,
+      xui_panel_port = NULL,
       last_setup_error = NULL,
       last_setup_at = datetime('now'),
       updated_at = datetime('now')

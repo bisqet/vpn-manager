@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Allow VPN profile `panel_hostname` to be a **FQDN or public IPv4/IPv6**, with **optional `panelHostname` on create/patch when `host` is a public IP** (derive panel from `host`); update **Caddy + verify scripts** and **web validation** accordingly.
+**Goal:** Allow VPN profile `panel_hostname` to be a **FQDN or public IPv4/IPv6**, with **optional `panelHostname` on create/patch when `host` is a public IP** (derive panel from `host`); update **reverse proxy (historical) + verify scripts** and **web validation** accordingly.
 
-**Architecture:** Centralize **parse / public-vs-reserved / normalize** in `apps/server/src/net/panelAddress.ts` using existing **`ip-address`** (`Address4` / `Address6`) and `isInSubnet` against a fixed list of **non-public CIDRs**. **`resolvePanelHostname({ host, panel })`** returns the string to persist or an error message. **Routes** call the resolver after Zod body parse (create + merged patch). **`buildSetupPhases`** formats **Caddy site keys** and **`curl` verify URLs** for FQDN vs IPv4 vs IPv6 (bracketed URL host for v6). **Caddy LE IP issuance:** follow **current Caddy documentation** during implementation for any extra `tls` / issuer options (do not guess).
+**Architecture:** Centralize **parse / public-vs-reserved / normalize** in `apps/server/src/net/panelAddress.ts` using existing **`ip-address`** (`Address4` / `Address6`) and `isInSubnet` against a fixed list of **non-public CIDRs**. **`resolvePanelHostname({ host, panel })`** returns the string to persist or an error message. **Routes** call the resolver after Zod body parse (create + merged patch). **`buildSetupPhases`** formats **reverse proxy (historical) site keys** and **`curl` verify URLs** for FQDN vs IPv4 vs IPv6 (bracketed URL host for v6). **reverse proxy (historical) LE IP issuance:** follow **current reverse proxy (historical) documentation** during implementation for any extra `tls` / issuer options (do not guess).
 
 **Tech stack:** Bun, Hono, Zod, `ip-address`, SQLite, React (VpnsPage).
+
+**Deployment note (2026-04-16):** **reverse proxy (historical)** portions describe **legacy** phased remote setup, not a requirement for new work; panel URL / validation tasks apply regardless of TLS front-end.
 
 ---
 
@@ -19,10 +21,10 @@
 | `apps/server/src/types.ts` | Loosen `panelHostname` on create (optional); update schema optional string; keep host/port/password rules |
 | `apps/server/src/routes/profiles.ts` | Call resolver on POST; merge + resolver on PATCH; trim `host` / stored fields as needed |
 | `apps/server/src/routes/profiles.test.ts` | Matrix for create/patch + setup error unchanged |
-| `apps/server/src/vpn/setupPhases.ts` | Use helpers for Caddy site line + verify `curl` URL |
+| `apps/server/src/vpn/setupPhases.ts` | Use helpers for reverse proxy (historical) site line + verify `curl` URL |
 | `apps/server/src/vpn/setupPhases.test.ts` | Assert IPv4 / IPv6 / FQDN fragments |
 | `apps/web/src/pages/VpnsPage.tsx` | Labels, help text, client validation aligned with server (optional empty panel when host is public IP) |
-| `AGENTS.md` (optional small note) | Mention LE IP certs need recent Caddy + short renewal |
+| `AGENTS.md` (optional small note) | Mention LE IP certs need recent reverse proxy (historical) + short renewal |
 
 ---
 
@@ -132,7 +134,7 @@ export function resolvePanelHostname(input: { host: string; panel: string }): Re
   };
 }
 
-/** Caddy site address key (first token of site block, before `{`). */
+/** reverse proxy (historical) site address key (first token of site block, before `{`). */
 export function caddySiteAddressKey(panel: string): string {
   if (isPublicIpLiteral(panel)) {
     const norm = normalizeIpLiteral(panel);
@@ -344,7 +346,7 @@ git commit -m "feat(server): resolve panel hostname from host when public IP"
 
 ---
 
-### Task 4: `setupPhases` Caddy + verify URL
+### Task 4: `setupPhases` reverse proxy (historical) + verify URL
 
 **Files:**
 
@@ -357,7 +359,7 @@ git commit -m "feat(server): resolve panel hostname from host when public IP"
 import { caddySiteAddressKey, httpsUrlHost } from "../net/panelAddress";
 ```
 
-In **`buildSetupPhases`**, replace bare `${panelHostname}` in the Caddy heredoc site line with **`${caddySiteAddressKey(panelHostname)}`**.
+In **`buildSetupPhases`**, replace bare `${panelHostname}` in the reverse proxy (historical) heredoc site line with **`${caddySiteAddressKey(panelHostname)}`**.
 
 In the **verify** phase script, replace:
 
@@ -373,9 +375,9 @@ curl -fsS -g -o /dev/null "https://${httpsUrlHost(panelHostname)}${webPathForUrl
 
 (`-g` disables URL globbing so literal `[]` in IPv6 URLs is safe.)
 
-- [ ] **Step 2: Documented Caddy / LE IP options (implementation research)**
+- [ ] **Step 2: Documented reverse proxy (historical) / LE IP options (implementation research)**
 
-Open current Caddy docs for **automatic HTTPS on IP addresses** (e.g. `https://caddyserver.com/docs/automatic-https` and search for “IP”). If the docs require **extra `tls` or global options** for Let’s Encrypt IP certificates (short-lived profile, etc.), add **only** those directives to the **`configure_caddy`** script template in this file, with a short comment in source pointing to the doc URL. If **no** extra directives are required for your minimum Caddy version, **do not add** guessed config.
+Open current reverse proxy (historical) docs for **automatic HTTPS on IP addresses** (e.g. `https://caddyserver.com/docs/automatic-https` and search for “IP”). If the docs require **extra `tls` or global options** for Let’s Encrypt IP certificates (short-lived profile, etc.), add **only** those directives to the **`configure_caddy`** script template in this file, with a short comment in source pointing to the doc URL. If **no** extra directives are required for your minimum reverse proxy (historical) version, **do not add** guessed config.
 
 - [ ] **Step 3: Extend `setupPhases.test.ts`**
 
@@ -416,7 +418,7 @@ Expected: **PASS**
 
 ```bash
 git add apps/server/src/vpn/setupPhases.ts apps/server/src/vpn/setupPhases.test.ts
-git commit -m "feat(server): format Caddy and verify URLs for IP panel addresses"
+git commit -m "feat(server): format reverse proxy (historical) and verify URLs for IP panel addresses"
 ```
 
 ---
@@ -467,7 +469,7 @@ git commit -m "feat(web): panel FQDN or public IP and optional panel when host i
 
 - [ ] **Step 1: AGENTS.md**
 
-Add one bullet: **Panel TLS** may use **Let’s Encrypt IP certificates** (short-lived); target server needs a **recent Caddy**; see design spec `docs/superpowers/specs/2026-04-14-bare-ip-panel-tls-design.md`.
+Add one bullet: **Panel TLS** may use **Let’s Encrypt IP certificates** (short-lived); target server needs a **recent reverse proxy (historical)**; see design spec `docs/superpowers/specs/2026-04-14-bare-ip-panel-tls-design.md`.
 
 - [ ] **Step 2: Full server test run**
 
@@ -478,7 +480,7 @@ Expected: **all PASS**
 
 ```bash
 git add AGENTS.md
-git commit -m "docs: note LE IP certs and Caddy for panel TLS"
+git commit -m "docs: note LE IP certs and reverse proxy (historical) for panel TLS"
 ```
 
 ---
@@ -493,12 +495,12 @@ git commit -m "docs: note LE IP certs and Caddy for panel TLS"
 | Omit panel when host public IP | Task 1 `resolvePanelHostname`; Task 3 POST/PATCH |
 | No DNS resolution for derivation | Task 1 only parses literals |
 | IPv6 RFC 5952 storage | Task 1 `normalizeIpLiteral` → `correctForm()` |
-| Caddy site + verify URL | Task 4 |
-| LE IP / Caddy version note | Task 4 research step + Task 6 AGENTS |
+| reverse proxy (historical) site + verify URL | Task 4 |
+| LE IP / reverse proxy (historical) version note | Task 4 research step + Task 6 AGENTS |
 | Web UX | Task 5 |
 | Tests | Tasks 1, 3, 4, 5 |
 
-**2. Placeholder scan:** No `TBD` / vague “add validation” steps; research step points to **reading Caddy docs** instead of inventing directives.
+**2. Placeholder scan:** No `TBD` / vague “add validation” steps; research step points to **reading reverse proxy (historical) docs** instead of inventing directives.
 
 **3. Type consistency:** Single resolver return shape `{ ok, panel | message }`; DB column stays `panel_hostname`; JSON field stays `panelHostname`.
 

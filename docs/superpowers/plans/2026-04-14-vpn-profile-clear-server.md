@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-14-vpn-profile-clear-server-design.md`
 
+**Deployment note (2026-04-16):** Teardown phases that touch **reverse proxy (historical)** mirror **legacy** setup scripts; they are **not** endorsing reverse proxy (historical) for new deployments (see root `AGENTS.md`).
+
 ---
 
 ## File map
@@ -124,7 +126,7 @@ rm -rf /usr/local/x-ui
 
   const stopCaddy: TeardownPhase = {
     id: "stop_caddy",
-    title: "Stop Caddy before package and config changes",
+    title: "Stop reverse proxy (historical) before package and config changes",
     script: `set -euo pipefail
 systemctl stop caddy 2>/dev/null || true
 `,
@@ -132,7 +134,7 @@ systemctl stop caddy 2>/dev/null || true
 
   const removeSite: TeardownPhase = {
     id: "remove_caddy_site",
-    title: "Remove VPN Manager Caddy site fragment",
+    title: "Remove VPN Manager reverse proxy (historical) site fragment",
     script: `set -euo pipefail
 rm -f ${CADDY_SITE_FILE}
 `,
@@ -156,7 +158,7 @@ fi
 
   const purgeCaddy: TeardownPhase = {
     id: "purge_caddy",
-    title: "Purge Caddy package",
+    title: "Purge reverse proxy (historical) package",
     script: `set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get purge -y caddy 2>/dev/null || true
@@ -165,7 +167,7 @@ apt-get purge -y caddy 2>/dev/null || true
 
   const removeApt: TeardownPhase = {
     id: "remove_caddy_apt_wiring",
-    title: "Remove Caddy stable apt source and keyring",
+    title: "Remove reverse proxy (historical) stable apt source and keyring",
     script: `set -euo pipefail
 rm -f ${CADDY_APT_LIST} ${CADDY_KEYRING}
 `,

@@ -183,6 +183,30 @@ describe("runPromptDriver", () => {
       globalTimeoutMs: 30_000,
       signal: new AbortController().signal,
       completionIncludes: "Panel Installation Complete",
+      tailDrainAfterCompleteMs: 0,
+    });
+
+    expect(writes).toEqual(["n\n"]);
+    expect(result.status).toBe("completed");
+  });
+
+  test("completionIncludes array completes on first matching marker present", async () => {
+    const writes: string[] = [];
+    const result = await runPromptDriver({
+      write: (s) => writes.push(s),
+      subscribeData: (cb) => {
+        cb(encoder.encode("Would you like to customize the Panel Port settings? [y/n]: \n"));
+        queueMicrotask(() => {
+          cb(encoder.encode("x-ui v2.8.11 installation finished, it is running now...\n"));
+        });
+        return () => {};
+      },
+      rules: createInstallShPromptRules({ panelHostname: "panel.example.com", isPanelIp: false }),
+      plaintext: createPtyPlaintextBuffer(),
+      globalTimeoutMs: 30_000,
+      signal: new AbortController().signal,
+      completionIncludes: ["Panel Installation Complete", "installation finished, it is running now"],
+      tailDrainAfterCompleteMs: 0,
     });
 
     expect(writes).toEqual(["n\n"]);
