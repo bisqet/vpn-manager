@@ -402,10 +402,15 @@ describe("chainsRoutes", () => {
     expect(await res.json()).toEqual({ error: "vpnProfileIds must contain at least one profile id" });
   });
 
-  test("generate-profile returns 400 for multi-hop chain", async () => {
+  test("generate-profile returns 200 for two-hop chain when panel succeeds", async () => {
+    const originalFetch = globalThis.fetch;
     const app = createApp(db, env);
     const firstProfileId = seedVpnProfile("Alpha");
     const secondProfileId = seedVpnProfile("Beta");
+    await seedWorkingVpnProfile(db, env.masterKey, firstProfileId);
+    await seedWorkingVpnProfile(db, env.masterKey, secondProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("entry.example.com", firstProfileId);
+    db.query("UPDATE vpn_profiles SET panel_hostname = ? WHERE id = ?").run("relay.example.com", secondProfileId);
 
     const createRes = await app.request("/api/chains", {
       method: "POST",
@@ -420,15 +425,97 @@ describe("chainsRoutes", () => {
     });
     expect(createRes.status).toBe(201);
 
-    const res = await app.request("/api/chains/1/generate-profile", {
-      method: "POST",
-      headers: {
-        Cookie: `${SESSION_COOKIE}=session-token`,
+    const xrayBundleObj = {
+      xraySetting: {
+        log: {},
+        inbounds: [],
+        outbounds: [
+          { tag: "direct", protocol: "freedom", settings: {} },
+          { tag: "blocked", protocol: "blackhole", settings: {} },
+        ],
+        routing: { domainStrategy: "AsIs", rules: [] },
       },
+      inboundTags: [],
+      outboundTestUrl: "https://www.google.com/generate_204",
+    };
+
+    const inboundAddObj = (inboundBody: Record<string, string | number | boolean>) => {
+      const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
+      return {
+        port: inboundBody.port,
+        protocol: "vless",
+        tag: `inbound-${inboundBody.port}`,
+        settings: JSON.stringify(settingsClients),
+        streamSettings: inboundBody.streamSettings,
+      };
+    };
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+      if (url.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "set-cookie": "3x-ui=abc; Path=/; HttpOnly",
+          },
+        });
+      }
+
+      if (url.endsWith("/panel/api/inbounds/add")) {
+        const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
+        return new Response(
+          JSON.stringify({ success: true, msg: "created", obj: inboundAddObj(inboundBody) }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/panel/xray/")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            msg: "ok",
+            obj: JSON.stringify(xrayBundleObj),
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/panel/xray/update")) {
+        return new Response(JSON.stringify({ success: true, msg: "saved" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.endsWith("/panel/api/server/restartXrayService")) {
+        return new Response(JSON.stringify({ success: true, msg: "restarted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
     });
 
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "Generate profile requires a single-hop chain." });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { vlessShareLink: string; subscriptionUrl: string };
+      expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
+      expect(body.subscriptionUrl).toContain("/sub/");
+      expect(fetchMock.mock.calls.length).toBe(12);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("generate-profile returns 404 when chain is missing", async () => {

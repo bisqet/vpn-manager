@@ -58,7 +58,7 @@ function extractSessionCookieHeader(setCookieLines: string[]): string {
   return "";
 }
 
-type PanelJson = { success?: boolean; msg?: string; obj?: unknown };
+export type PanelJson = { success?: boolean; msg?: string; obj?: unknown };
 
 function assertPanelJson(value: unknown): asserts value is PanelJson {
   if (value === null || typeof value !== "object") {
@@ -225,7 +225,7 @@ function panelHostname(panelBaseUrl: string): string {
   }
 }
 
-function resolveVlessShareLink(input: {
+export function resolveVlessShareLink(input: {
   panelBaseUrl: string;
   inboundBody: Record<string, unknown>;
   addJson: PanelJson;

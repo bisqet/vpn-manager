@@ -5,9 +5,11 @@ import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import type { Env } from "../env";
 import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
-import { buildVlessRealityInboundBody } from "../xui/buildVlessRealityInboundBody";
-import { generateRealityClientMaterial } from "../xui/realityKeyMaterial";
-import { provisionChainClientAccess } from "../xui/provisionChainClientAccess";
+import { dialHostForVpnProfile } from "../xui/dialHostForVpnProfile";
+import {
+  type HopPanelContext,
+  provisionMultihopChainClientAccess,
+} from "../xui/provisionMultihopChainClientAccess";
 
 type ChainListRow = {
   chain_id: number;
@@ -363,74 +365,74 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
       return c.json({ error: "Chain not found" }, 404);
     }
 
-    if (chain.hops.length !== 1) {
-      return c.json({ error: "Generate profile requires a single-hop chain." }, 400);
+    if (chain.hops.length === 0) {
+      return c.json({ error: "Chain has no hops." }, 400);
     }
 
-    const hop = chain.hops[0]!;
-    const row =
-      db
-        .query<
-          {
-            operational_status: string;
-            panel_hostname: string;
-            xui_web_base_path: string | null;
-            xui_panel_port: number | null;
-            xui_secrets_ciphertext: Uint8Array | null;
-            xui_secrets_nonce: Uint8Array | null;
-          },
-          [number]
-        >(
-          `SELECT operational_status, panel_hostname, xui_web_base_path, xui_panel_port,
-                  xui_secrets_ciphertext, xui_secrets_nonce
-           FROM vpn_profiles WHERE id = ?`,
-        )
-        .get(hop.vpnProfileId) ?? null;
+    const hops: HopPanelContext[] = [];
 
-    if (
-      !row ||
-      row.operational_status !== "working" ||
-      !row.xui_secrets_ciphertext ||
-      !row.xui_secrets_nonce
-    ) {
-      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
-    }
+    for (const hop of chain.hops) {
+      const row =
+        db
+          .query<
+            {
+              operational_status: string;
+              host: string;
+              panel_hostname: string;
+              xui_web_base_path: string | null;
+              xui_panel_port: number | null;
+              xui_secrets_ciphertext: Uint8Array | null;
+              xui_secrets_nonce: Uint8Array | null;
+            },
+            [number]
+          >(
+            `SELECT operational_status, host, panel_hostname, xui_web_base_path, xui_panel_port,
+                    xui_secrets_ciphertext, xui_secrets_nonce
+             FROM vpn_profiles WHERE id = ?`,
+          )
+          .get(hop.vpnProfileId) ?? null;
 
-    let secrets;
-    try {
-      secrets = await decryptXuiSecretsJson(env.masterKey, row.xui_secrets_ciphertext, row.xui_secrets_nonce);
-    } catch {
-      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
-    }
+      if (
+        !row ||
+        row.operational_status !== "working" ||
+        !row.xui_secrets_ciphertext ||
+        !row.xui_secrets_nonce
+      ) {
+        return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+      }
 
-    if (secrets.v !== 1) {
-      return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
-    }
+      let secrets;
+      try {
+        secrets = await decryptXuiSecretsJson(env.masterKey, row.xui_secrets_ciphertext, row.xui_secrets_nonce);
+      } catch {
+        return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+      }
 
-    const panelPort = row.xui_panel_port == null ? null : Number(row.xui_panel_port);
-    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path, panelPort);
-    if (!panelUrl) {
-      return c.json({ error: "Panel URL is not available for this profile." }, 409);
-    }
+      if (secrets.v !== 1) {
+        return c.json({ error: "VPN profile must be working with stored panel credentials." }, 409);
+      }
 
-    const material = await generateRealityClientMaterial();
-    const inboundBody = buildVlessRealityInboundBody({
-      port: 443,
-      remark: `chain-${id}-${Date.now()}`,
-      clientEmail: `vpnmgr-${material.clientUuid}@chain-${id}.local`,
-      clientUuid: material.clientUuid,
-      subId: material.subId,
-      shortId: material.shortId,
-      realityPrivateKeyB64: material.realityPrivateKeyB64,
-      realityPublicKeyB64: material.realityPublicKeyB64,
-    });
+      const panelPort = row.xui_panel_port == null ? null : Number(row.xui_panel_port);
+      const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path, panelPort);
+      if (!panelUrl) {
+        return c.json({ error: "Panel URL is not available for this profile." }, 409);
+      }
 
-    try {
-      const result = await provisionChainClientAccess({
+      hops.push({
         panelBaseUrl: panelUrl,
         adminUsername: secrets.adminUsername,
         adminPassword: secrets.adminPassword,
-        inboundBody: inboundBody as unknown as Record<string, unknown>,
+        dialHost: dialHostForVpnProfile({
+          panel_hostname: row.panel_hostname,
+          host: row.host,
+        }),
+      });
+    }
+
+    try {
+      const result = await provisionMultihopChainClientAccess({
+        chainId: id,
+        hops,
         fetchFn: globalThis.fetch,
       });
       return c.json(result);
