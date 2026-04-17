@@ -645,7 +645,7 @@ describe("profilesRoutes", () => {
 
     await seedWorkingProfileAfterInstall(db, env.masterKey, 1, {
       webBasePath: "xUiDocBase18char",
-      panelPort: 45543,
+      panelPort: 5443,
     });
 
     const loginRes = await app.request("/api/profiles/1/panel-login", {
@@ -653,7 +653,7 @@ describe("profilesRoutes", () => {
     });
     expect(loginRes.status).toBe(200);
     const body = (await loginRes.json()) as { panelUrl: string };
-    expect(body.panelUrl).toBe("https://203.0.113.55:45543/xUiDocBase18char/");
+    expect(body.panelUrl).toBe("https://203.0.113.55:5443/xUiDocBase18char/");
   });
 
   test("GET /api/profiles/:id/panel-login returns 404 when profile missing", async () => {

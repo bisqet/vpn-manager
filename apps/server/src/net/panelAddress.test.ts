@@ -85,8 +85,8 @@ describe("buildPanelHttpsUrl", () => {
     expect(buildPanelHttpsUrl("2001:4860:4860::8888", "p")).toBe("https://[2001:4860:4860::8888]/p/");
   });
   test("includes explicit non-443 port for direct x-ui listener", () => {
-    expect(buildPanelHttpsUrl("203.0.113.55", "xUiDocBase18char", 45543)).toBe(
-      "https://203.0.113.55:45543/xUiDocBase18char/",
+    expect(buildPanelHttpsUrl("203.0.113.55", "xUiDocBase18char", 5443)).toBe(
+      "https://203.0.113.55:5443/xUiDocBase18char/",
     );
   });
   test("omits port for null or 443", () => {

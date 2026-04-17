@@ -28,3 +28,6 @@ tools/xray/
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Cursor agent debug ingest logs (can contain hosts/ports from local runs)
+.cursor/debug-*.log
