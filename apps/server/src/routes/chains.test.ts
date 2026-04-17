@@ -553,4 +553,87 @@ describe("chainsRoutes", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("generate-profile returns 502 with reason panel_request when login fails", async () => {
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+    await seedWorkingVpnProfile(db, env.masterKey, profileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/login")) {
+        return new Response(JSON.stringify({ success: false, msg: "bad" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "Panel request failed.", reason: "panel_request" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("generate-profile returns 502 with reason network when fetch throws", async () => {
+    const originalFetch = globalThis.fetch;
+    const app = createApp(db, env);
+    const profileId = seedVpnProfile("Solo");
+    await seedWorkingVpnProfile(db, env.masterKey, profileId);
+
+    const createRes = await app.request("/api/chains", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        name: "Single hop",
+        vpnProfileIds: [profileId],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    globalThis.fetch = mock(() => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+
+    try {
+      const res = await app.request("/api/chains/1/generate-profile", {
+        method: "POST",
+        headers: {
+          Cookie: `${SESSION_COOKIE}=session-token`,
+        },
+      });
+
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "Panel request failed.", reason: "network" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

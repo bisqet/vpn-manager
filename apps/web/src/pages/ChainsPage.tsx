@@ -117,9 +117,31 @@ function postGenerateProfile(chainId: number) {
   });
 }
 
+const GENERATE_PROFILE_502_HINTS: Record<string, string> = {
+  tls:
+    "TLS verification failed while the server called your 3x-ui panel. If the panel uses a self-signed certificate, set VPN_MANAGER_PANEL_FETCH_TLS_INSECURE=1 in apps/server .env (development only), restart the API, and try again.",
+  network:
+    "The API server could not reach the panel URL (DNS, firewall, wrong host/port, or the API is not running). Confirm panelHostname and that outbound HTTPS from the machine running VPN Manager works.",
+  panel_request:
+    "The panel rejected the request (wrong admin password, login blocked, or inbound add failed — e.g. port already in use). Check the API terminal log line starting with [generate-profile].",
+  unknown: "Check the API server terminal for a log line starting with [generate-profile].",
+};
+
 function getErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
-    return error.message;
+    let message = error.message;
+    if (
+      error.status === 502 &&
+      typeof error.body === "object" &&
+      error.body !== null &&
+      !Array.isArray(error.body) &&
+      typeof (error.body as { reason?: unknown }).reason === "string"
+    ) {
+      const reason = (error.body as { reason: string }).reason;
+      const hint = GENERATE_PROFILE_502_HINTS[reason] ?? GENERATE_PROFILE_502_HINTS.unknown;
+      message = `${message} ${hint}`;
+    }
+    return message;
   }
 
   if (error instanceof Error) {
