@@ -2,10 +2,12 @@ import type { Database } from "bun:sqlite";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import { agentDebugLog, agentDebugLogError } from "../debug/agentDebugLog";
 import type { Env } from "../env";
 import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
 import { dialHostForVpnProfile } from "../xui/dialHostForVpnProfile";
+import { PanelRequestError } from "../xui/provisionChainClientAccess";
 import {
   type HopPanelContext,
   provisionMultihopChainClientAccess,
@@ -430,13 +432,42 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
     }
 
     try {
+      // #region agent log
+      agentDebugLog({
+        location: "chains.ts:generate-profile",
+        message: "pre_provision",
+        data: {
+          chainId: id,
+          hopCount: hops.length,
+          hopHosts: hops.map((h) => {
+            try {
+              return new URL(h.panelBaseUrl).hostname;
+            } catch {
+              return "invalid-panel-url";
+            }
+          }),
+        },
+        hypothesisId: "H5",
+      });
+      // #endregion
       const result = await provisionMultihopChainClientAccess({
         chainId: id,
         hops,
         fetchFn: globalThis.fetch,
       });
       return c.json(result);
-    } catch {
+    } catch (err: unknown) {
+      // #region agent log
+      const name = err instanceof Error ? err.name : typeof err;
+      const msg = err instanceof Error ? err.message.slice(0, 240) : String(err).slice(0, 240);
+      const isPanel = err instanceof PanelRequestError;
+      agentDebugLogError({
+        location: "chains.ts:generate-profile",
+        message: "provision_caught",
+        data: { name, msg, isPanel },
+        hypothesisId: "H1",
+      });
+      // #endregion
       // Do not forward panel or transport exception text to the client (avoid leaking internals).
       return c.json({ error: "Panel request failed." }, 502);
     }
