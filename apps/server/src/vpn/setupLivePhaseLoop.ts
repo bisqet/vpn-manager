@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import type { Env } from "../env";
+import { schedulePanelReachabilityProbe } from "../net/panelReachabilityProbe";
 import type { SshExecFn } from "./sshExec";
 
 /** Matches the shape returned from live setup in `setupRunner.ts`. */
@@ -118,11 +119,17 @@ export async function runLiveSetupPhases(options: {
       xui_secrets_ciphertext = ?,
       xui_secrets_nonce = ?,
       xui_web_base_path = ?,
+      xui_panel_port = NULL,
       last_setup_error = NULL,
       last_setup_at = datetime('now'),
+      panel_reachability = 'checking',
+      panel_reachability_detail = NULL,
+      panel_reachability_checked_at = NULL,
       updated_at = datetime('now')
     WHERE id = ?`,
   ).run(ciphertext, nonce, webBasePath, profileId);
+
+  schedulePanelReachabilityProbe({ db, profileId });
 
   return { outcome: "live-success", phases: results };
 }

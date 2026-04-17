@@ -5,6 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { Env } from "../env";
 import type { AppSettingsDto } from "../db/appSettings";
 import { encryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import { schedulePanelReachabilityProbe } from "../net/panelReachabilityProbe";
 import { buildSsh2ConnectOptions } from "./ssh2ConnectOptions";
 import {
   beginSetupRun,
@@ -76,11 +77,17 @@ async function persistInstallSessionResult(options: {
         xui_secrets_ciphertext = ?,
         xui_secrets_nonce = ?,
         xui_web_base_path = ?,
+        xui_panel_port = ?,
         last_setup_error = NULL,
         last_setup_at = datetime('now'),
+        panel_reachability = 'checking',
+        panel_reachability_detail = NULL,
+        panel_reachability_checked_at = NULL,
         updated_at = datetime('now')
       WHERE id = ?`,
-    ).run(ciphertext, nonce, result.webBasePath, profileId);
+    ).run(ciphertext, nonce, result.webBasePath, result.panelPort, profileId);
+
+    schedulePanelReachabilityProbe({ db, profileId });
     return;
   }
 

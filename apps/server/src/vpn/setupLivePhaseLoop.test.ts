@@ -66,9 +66,14 @@ describe("runLiveSetupPhases", () => {
         xui_secrets_ciphertext: Uint8Array | null;
         xui_secrets_nonce: Uint8Array | null;
         xui_web_base_path: string | null;
+        xui_panel_port: number | null;
         last_setup_error: string | null;
+        panel_reachability: string;
+        panel_reachability_detail: string | null;
+        panel_reachability_checked_at: string | null;
       }, [number]>(
-        `SELECT operational_status, xui_secrets_ciphertext, xui_secrets_nonce, xui_web_base_path, last_setup_error
+        `SELECT operational_status, xui_secrets_ciphertext, xui_secrets_nonce, xui_web_base_path, xui_panel_port, last_setup_error,
+                panel_reachability, panel_reachability_detail, panel_reachability_checked_at
          FROM vpn_profiles WHERE id = ?`,
       )
       .get(profileId)!;
@@ -77,7 +82,11 @@ describe("runLiveSetupPhases", () => {
     expect(row.xui_secrets_ciphertext).not.toBeNull();
     expect(row.xui_secrets_nonce).not.toBeNull();
     expect(row.xui_web_base_path).toBe("webbasepath18chars");
+    expect(row.xui_panel_port).toBeNull();
     expect(row.last_setup_error).toBeNull();
+    expect(row.panel_reachability).toBe("checking");
+    expect(row.panel_reachability_detail).toBeNull();
+    expect(row.panel_reachability_checked_at).toBeNull();
   });
 
   test("aborted signal before first phase yields live-failed and cancel error in DB", async () => {
