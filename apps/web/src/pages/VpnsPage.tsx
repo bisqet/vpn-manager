@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CSSProperties, FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type AuthUser, apiFetch } from "../api/client";
+import { attachTerminalRightClickCopyPaste } from "../lib/attachTerminalRightClickCopyPaste";
 import { isFqdnPanel, isPublicIpLiteral } from "../lib/panelAddress";
 
 const profilesQueryKey = ["profiles"] as const;
@@ -450,6 +451,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
     let terminal: Terminal | undefined;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let detachRmb: (() => void) | undefined;
 
     void (async () => {
       const preRes = await fetch("/api/profiles/ssh-terminal/preflight", {
@@ -494,6 +496,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
       term.loadAddon(fitAddon);
       term.open(container);
       fitAddon.fit();
+      detachRmb = attachTerminalRightClickCopyPaste(term, container);
 
       const encoder = new TextEncoder();
       term.onData((data) => {
@@ -557,6 +560,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
       cancelled = true;
       clearTimeout(resizeTimer);
       resizeObserver?.disconnect();
+      detachRmb?.();
       ws?.close();
       terminal?.dispose();
     };
@@ -671,6 +675,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     let terminal: Terminal | undefined;
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let detachRmb: (() => void) | undefined;
 
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProtocol}//${window.location.host}/api/profiles/${profile.id}/setup-terminal`;
@@ -685,6 +690,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     term.loadAddon(fitAddon);
     term.open(container);
     fitAddon.fit();
+    detachRmb = attachTerminalRightClickCopyPaste(term, container);
     requestAnimationFrame(() => {
       fitAddon.fit();
     });
@@ -765,6 +771,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
     return () => {
       clearTimeout(resizeTimer);
       resizeObserver?.disconnect();
+      detachRmb?.();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
