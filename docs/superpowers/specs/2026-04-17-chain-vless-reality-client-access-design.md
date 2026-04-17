@@ -36,6 +36,8 @@ The user picks whichever fits their client. **Each successful generation creates
 - Opening firewall ports on the remote host beyond what the operator already configured for 3x-ui / Xray.  
 - Browser-side calls to the VPN host or panel; **only the VPN Manager API** talks to the panel.
 
+**Optional extension (implemented separately):** When **`app_settings.vpn_ssh_enabled`** is true and the operator has installed the **`vpnmgr-xui-ufw-sync`** script plus **`sudoers`** on the 3x-ui host (see `docs/superpowers/specs/2026-04-17-vpn-manager-3x-ui-ufw-sync-design.md`), **`POST …/generate-profile`** may open an **SSH** session only to run that fixed reconcile command after a successful panel **inbound** mutation. **Cloud security groups** remain operator-owned; client material is still obtained via the **panel HTTP API**, not by scraping Xray over SSH.
+
 ## Architecture
 
 | Layer | Responsibility |
@@ -44,7 +46,7 @@ The user picks whichever fits their client. **Each successful generation creates
 | **`apps/web`** | **Generate profile** control on chain UI → `POST` → modal with two copy targets; handles errors. |
 | **3x-ui (remote)** | Source of truth for inbound/client and subscription URL format. |
 
-**Recommended approach:** **Panel HTTP API only** (no SSH for this feature). Rationale: credentials and TLS base URL already exist; avoids duplicating Xray JSON manipulation over SSH.
+**Recommended approach:** **Panel HTTP API** for login, inbound creation, and client material (share link / subscription URL). **Optional SSH** is reserved for **UFW reconcile** when enabled in settings; it does not replace the panel API for Xray JSON.
 
 ## Data flow
 
