@@ -44,21 +44,30 @@ describe("provisionMultihopChainClientAccess", () => {
         });
       }
 
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
       if (url.includes("relay.example.com") && url.endsWith("/panel/api/inbounds/add")) {
-        const body = JSON.parse(init?.body as string) as Record<string, string>;
+        const body = JSON.parse(init?.body as string) as Record<string, string | number>;
+        const p = Number(body.port);
         return new Response(
           JSON.stringify(
-            inboundForAddResponse("inbound-443", 443, body.settings as string, body.streamSettings as string),
+            inboundForAddResponse(`inbound-${p}`, p, body.settings as string, body.streamSettings as string),
           ),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
 
       if (url.includes("entry.example.com") && url.endsWith("/panel/api/inbounds/add")) {
-        const body = JSON.parse(init?.body as string) as Record<string, string>;
+        const body = JSON.parse(init?.body as string) as Record<string, string | number>;
+        const p = Number(body.port);
         return new Response(
           JSON.stringify(
-            inboundForAddResponse("inbound-443", 443, body.settings as string, body.streamSettings as string),
+            inboundForAddResponse(`inbound-${p}`, p, body.settings as string, body.streamSettings as string),
           ),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -113,11 +122,11 @@ describe("provisionMultihopChainClientAccess", () => {
 
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
     expect(out.subscriptionUrl).toContain("/sub/");
-    // hop1 login+add, hop0 login+add, hop0 login+xray+update+restart, hop1 login+xray+update+restart
-    expect(fetchMock.mock.calls.length).toBe(12);
+    // hop1 login+list+add, hop0 login+list+add, hop0 login+xray+update+restart, hop1 login+xray+update+restart
+    expect(fetchMock.mock.calls.length).toBe(14);
   });
 
-  test("single hop delegates to one inbound add (two fetch calls)", async () => {
+  test("single hop delegates to provisionChainClientAccess (login, list, add)", async () => {
     const inboundBody = buildVlessRealityInboundBody({
       port: 4433,
       remark: "solo",
@@ -129,12 +138,6 @@ describe("provisionMultihopChainClientAccess", () => {
       realityPublicKeyB64: Buffer.alloc(32, 5).toString("base64"),
     });
     const settingsClients = JSON.parse(inboundBody.settings) as { clients: unknown[] };
-    const addObj = {
-      port: 4433,
-      protocol: "vless",
-      settings: JSON.stringify(settingsClients),
-      streamSettings: inboundBody.streamSettings,
-    };
 
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -143,7 +146,19 @@ describe("provisionMultihopChainClientAccess", () => {
           headers: { "set-cookie": "3x-ui=abc; Path=/", "content-type": "application/json" },
         });
       }
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (url.endsWith("/panel/api/inbounds/add")) {
+        const sent = JSON.parse(init?.body as string) as { port: number; settings: string; streamSettings: string };
+        const addObj = {
+          port: sent.port,
+          protocol: "vless",
+          settings: JSON.stringify(settingsClients),
+          streamSettings: sent.streamSettings,
+        };
         return new Response(JSON.stringify({ success: true, msg: "ok", obj: addObj }), {
           headers: { "content-type": "application/json" },
         });
@@ -165,6 +180,6 @@ describe("provisionMultihopChainClientAccess", () => {
     });
 
     expect(out.vlessShareLink.startsWith("vless://")).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

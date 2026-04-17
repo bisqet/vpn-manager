@@ -1,3 +1,4 @@
+import { agentDebugLog } from "../debug/agentDebugLog";
 import { buildVlessRealityInboundBody } from "./buildVlessRealityInboundBody";
 import { buildVlessRealityOutbound } from "./buildVlessRealityOutbound";
 import {
@@ -15,9 +16,11 @@ import {
   type PanelJson,
   PanelRequestError,
   buildSubscriptionUrl,
-  panelBaseForProvision,
+  fetchInboundUsedPorts,
+  pickFreeListenPort,
   provisionChainClientAccess,
   resolveVlessShareLink,
+  withPanelTlsInsecureHttpFallback,
 } from "./provisionChainClientAccess";
 import { generateRealityClientMaterial } from "./realityKeyMaterial";
 
@@ -85,31 +88,32 @@ async function loginCookie(input: {
   adminPassword: string;
   fetchFn: typeof fetch;
 }): Promise<{ base: string; cookieHeader: string }> {
-  const base = panelBaseForProvision(input.panelBaseUrl);
-  const loginUrl = new URL("login", base).href;
-  const loginBody = new URLSearchParams({
-    username: input.adminUsername,
-    password: input.adminPassword,
-    twoFactorCode: "",
+  return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
+    const loginUrl = new URL("login", base).href;
+    const loginBody = new URLSearchParams({
+      username: input.adminUsername,
+      password: input.adminPassword,
+      twoFactorCode: "",
+    });
+
+    const loginResponse = await input.fetchFn(loginUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        accept: "application/json",
+      },
+      body: loginBody.toString(),
+    });
+
+    const loginJson = await readPanelJson(loginResponse);
+    requireSuccess(loginJson, "login failed");
+
+    const cookieHeader = extractSessionCookieHeader(readSetCookieLines(loginResponse.headers));
+    if (!cookieHeader) {
+      throw new PanelRequestError("login succeeded but session cookie (3x-ui) was not set");
+    }
+    return { base, cookieHeader };
   });
-
-  const loginResponse = await input.fetchFn(loginUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-      accept: "application/json",
-    },
-    body: loginBody.toString(),
-  });
-
-  const loginJson = await readPanelJson(loginResponse);
-  requireSuccess(loginJson, "login failed");
-
-  const cookieHeader = extractSessionCookieHeader(readSetCookieLines(loginResponse.headers));
-  if (!cookieHeader) {
-    throw new PanelRequestError("login succeeded but session cookie (3x-ui) was not set");
-  }
-  return { base, cookieHeader };
 }
 
 function inboundTagFromAddResponse(addJson: PanelJson, inboundBody: Record<string, unknown>): string {
@@ -177,6 +181,14 @@ export async function provisionMultihopChainClientAccess(
 ): Promise<ChainClientAccessResult> {
   const hops = input.hops;
   const fetchFn = input.fetchFn ?? fetch;
+  // #region agent log
+  agentDebugLog({
+    location: "provisionMultihopChainClientAccess.ts:entry",
+    message: "provision_start",
+    data: { chainId: input.chainId, hopCount: hops.length, singleHop: hops.length === 1 },
+    hypothesisId: "H4",
+  });
+  // #endregion
   if (hops.length === 0) {
     throw new PanelRequestError("chain has no hops");
   }
@@ -209,8 +221,17 @@ export async function provisionMultihopChainClientAccess(
   for (let k = hops.length - 1; k >= 1; k--) {
     const hop = hops[k]!;
     const material = await generateRealityClientMaterial();
+
+    const { base, cookieHeader } = await loginCookie({
+      panelBaseUrl: hop.panelBaseUrl,
+      adminUsername: hop.adminUsername,
+      adminPassword: hop.adminPassword,
+      fetchFn,
+    });
+    const usedOnHop = await fetchInboundUsedPorts({ panelApiBase: base, cookieHeader, fetchFn });
+    const listenPort = pickFreeListenPort(usedOnHop);
     const inboundBody = buildVlessRealityInboundBody({
-      port: 443,
+      port: listenPort,
       remark: `chain-${input.chainId}-${runId}-recv-${k}`,
       clientEmail: `vpnmgr-${material.clientUuid}@chain-${input.chainId}-hop${k}.local`,
       clientUuid: material.clientUuid,
@@ -220,12 +241,6 @@ export async function provisionMultihopChainClientAccess(
       realityPublicKeyB64: material.realityPublicKeyB64,
     }) as unknown as Record<string, unknown>;
 
-    const { base, cookieHeader } = await loginCookie({
-      panelBaseUrl: hop.panelBaseUrl,
-      adminUsername: hop.adminUsername,
-      adminPassword: hop.adminPassword,
-      fetchFn,
-    });
     const addJson = await addInbound({ base, cookieHeader, inboundBody, fetchFn });
     const inboundTag = inboundTagFromAddResponse(addJson, inboundBody);
     const portRaw = inboundBody.port;
@@ -246,8 +261,21 @@ export async function provisionMultihopChainClientAccess(
 
   const entry = hops[0]!;
   const entryMaterial = await generateRealityClientMaterial();
+
+  const entrySession = await loginCookie({
+    panelBaseUrl: entry.panelBaseUrl,
+    adminUsername: entry.adminUsername,
+    adminPassword: entry.adminPassword,
+    fetchFn,
+  });
+  const usedOnEntry = await fetchInboundUsedPorts({
+    panelApiBase: entrySession.base,
+    cookieHeader: entrySession.cookieHeader,
+    fetchFn,
+  });
+  const entryListenPort = pickFreeListenPort(usedOnEntry);
   const userInboundBody = buildVlessRealityInboundBody({
-    port: 443,
+    port: entryListenPort,
     remark: `chain-${input.chainId}-${runId}-user`,
     clientEmail: `vpnmgr-${entryMaterial.clientUuid}@chain-${input.chainId}.local`,
     clientUuid: entryMaterial.clientUuid,
@@ -257,12 +285,6 @@ export async function provisionMultihopChainClientAccess(
     realityPublicKeyB64: entryMaterial.realityPublicKeyB64,
   }) as unknown as Record<string, unknown>;
 
-  const entrySession = await loginCookie({
-    panelBaseUrl: entry.panelBaseUrl,
-    adminUsername: entry.adminUsername,
-    adminPassword: entry.adminPassword,
-    fetchFn,
-  });
   const userAddJson = await addInbound({
     base: entrySession.base,
     cookieHeader: entrySession.cookieHeader,
@@ -279,6 +301,15 @@ export async function provisionMultihopChainClientAccess(
     inboundBody: userInboundBody,
     addJson: userAddJson,
   });
+
+  // #region agent log
+  agentDebugLog({
+    location: "provisionMultihopChainClientAccess.ts:after_user_inbound",
+    message: "phase_inbounds_done",
+    data: { chainId: input.chainId, downstreamEdges: edgeByDownstreamIndex.size },
+    hypothesisId: "H2",
+  });
+  // #endregion
 
   for (let k = 0; k <= hops.length - 2; k++) {
     const hop = hops[k]!;
@@ -309,6 +340,19 @@ export async function provisionMultihopChainClientAccess(
       fetchFn,
     });
     const bundle = await fetchPanelXrayBundle({ panelBaseUrl: hop.panelBaseUrl, cookieHeader, fetchFn });
+    // #region agent log
+    agentDebugLog({
+      location: "provisionMultihopChainClientAccess.ts:forward_xray",
+      message: "before_xray_json_parse_forwarder",
+      data: {
+        chainId: input.chainId,
+        forwarderIndex: k,
+        xraySettingLen: bundle.xraySettingText.length,
+        xraySettingHead: bundle.xraySettingText.slice(0, 80),
+      },
+      hypothesisId: "H2",
+    });
+    // #endregion
     const xrayObj = JSON.parse(bundle.xraySettingText) as Record<string, unknown>;
     let merged = appendOutbound({ xray: xrayObj, outbound });
     merged = mergeInboundToOutboundRule({
@@ -343,6 +387,18 @@ export async function provisionMultihopChainClientAccess(
     cookieHeader: lastSession.cookieHeader,
     fetchFn,
   });
+  // #region agent log
+  agentDebugLog({
+    location: "provisionMultihopChainClientAccess.ts:last_hop",
+    message: "before_xray_json_parse_last",
+    data: {
+      chainId: input.chainId,
+      xraySettingLen: lastBundle.xraySettingText.length,
+      xraySettingHead: lastBundle.xraySettingText.slice(0, 80),
+    },
+    hypothesisId: "H2",
+  });
+  // #endregion
   const lastXray = JSON.parse(lastBundle.xraySettingText) as Record<string, unknown>;
   const directTag = findFreedomOutboundTag(lastXray as { outbounds?: unknown[] });
   const lastMerged = mergeInboundToOutboundRule({

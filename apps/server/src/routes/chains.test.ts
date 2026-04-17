@@ -463,6 +463,13 @@ describe("chainsRoutes", () => {
         });
       }
 
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
       if (url.endsWith("/panel/api/inbounds/add")) {
         const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
         return new Response(
@@ -512,7 +519,7 @@ describe("chainsRoutes", () => {
       const body = (await res.json()) as { vlessShareLink: string; subscriptionUrl: string };
       expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
-      expect(fetchMock.mock.calls.length).toBe(12);
+      expect(fetchMock.mock.calls.length).toBe(14);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -601,6 +608,13 @@ describe("chainsRoutes", () => {
         });
       }
 
+      if (url.endsWith("/panel/api/inbounds/list")) {
+        return new Response(JSON.stringify({ success: true, msg: "ok", obj: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
       if (url.endsWith("/panel/api/inbounds/add")) {
         const inboundBody = JSON.parse(init?.body as string) as Record<string, string | number | boolean>;
         const settingsClients = JSON.parse(inboundBody.settings as string) as { clients: unknown[] };
@@ -635,7 +649,7 @@ describe("chainsRoutes", () => {
       expect(typeof body.subscriptionUrl).toBe("string");
       expect(body.vlessShareLink.startsWith("vless://")).toBe(true);
       expect(body.subscriptionUrl).toContain("/sub/");
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       globalThis.fetch = originalFetch;
     }

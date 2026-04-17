@@ -18,20 +18,38 @@ export class PanelRequestError extends Error {
   }
 }
 
-function normalizePanelBaseUrl(panelBaseUrl: string): string {
+/** Trim and ensure a trailing slash for relative URL resolution. */
+export function panelBaseForProvision(panelBaseUrl: string): string {
   const trimmed = panelBaseUrl.trim();
   if (trimmed === "") return "/";
   return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
 }
 
-/** When `VPN_MANAGER_PANEL_TLS_INSECURE` is true/1/yes, use `http://` instead of `https://` for panel API calls. */
-export function panelBaseForProvision(panelBaseUrl: string): string {
-  const normalized = normalizePanelBaseUrl(panelBaseUrl);
+function panelTlsInsecureEnvEnabled(): boolean {
   const v = process.env.VPN_MANAGER_PANEL_TLS_INSECURE?.trim().toLowerCase();
-  if ((v === "1" || v === "true" || v === "yes") && normalized.startsWith("https://")) {
-    return `http://${normalized.slice("https://".length)}`;
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/**
+ * When `VPN_MANAGER_PANEL_TLS_INSECURE` is true/1/yes and the panel URL is `https://...`,
+ * run the callback with that HTTPS base first. If it throws with anything other than
+ * {@link PanelRequestError} (TLS/connection failures), retry once using the matching `http://` base.
+ */
+export async function withPanelTlsInsecureHttpFallback<A>(
+  panelBaseUrl: string,
+  run: (base: string) => Promise<A>,
+): Promise<A> {
+  const base = panelBaseForProvision(panelBaseUrl);
+  if (!panelTlsInsecureEnvEnabled() || !base.startsWith("https://")) {
+    return run(base);
   }
-  return normalized;
+  const httpBase = `http://${base.slice("https://".length)}`;
+  try {
+    return await run(base);
+  } catch (e) {
+    if (e instanceof PanelRequestError) throw e;
+    return await run(httpBase);
+  }
 }
 
 /**
@@ -39,7 +57,7 @@ export function panelBaseForProvision(panelBaseUrl: string): string {
  * If an install uses a non-default sub path or host, this may need a panel-derived URL later.
  */
 export function buildSubscriptionUrl(panelBaseUrl: string, subId: string): string {
-  const base = normalizePanelBaseUrl(panelBaseUrl);
+  const base = panelBaseForProvision(panelBaseUrl);
   return new URL(`sub/${encodeURIComponent(subId)}`, base).href;
 }
 
@@ -84,6 +102,53 @@ function requireSuccess(json: PanelJson, fallbackMessage: string): void {
   if (json.success !== true) {
     throw new PanelRequestError(typeof json.msg === "string" && json.msg !== "" ? json.msg : fallbackMessage);
   }
+}
+
+/** Ports already used on the panel (from `GET panel/api/inbounds/list`). */
+export async function fetchInboundUsedPorts(input: {
+  panelApiBase: string;
+  cookieHeader: string;
+  fetchFn: typeof fetch;
+}): Promise<Set<number>> {
+  const url = new URL("panel/api/inbounds/list", input.panelApiBase).href;
+  const response = await input.fetchFn(url, {
+    method: "GET",
+    headers: {
+      cookie: input.cookieHeader,
+      accept: "application/json",
+    },
+  });
+  const json = await readPanelJson(response);
+  requireSuccess(json, "list inbounds failed");
+  const used = new Set<number>();
+  let rows: unknown = json.obj;
+  if (typeof rows === "string") {
+    try {
+      rows = JSON.parse(rows);
+    } catch {
+      return used;
+    }
+  }
+  if (!Array.isArray(rows)) return used;
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const portRaw = (row as { port?: unknown }).port;
+    const port = typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number(portRaw) : NaN;
+    if (Number.isFinite(port) && port > 0 && port <= 65535) used.add(Math.trunc(port));
+  }
+  return used;
+}
+
+/** Prefer 443, then common alternates, then high ports. */
+export function pickFreeListenPort(usedPorts: ReadonlySet<number>): number {
+  if (!usedPorts.has(443)) return 443;
+  for (let p = 8443; p <= 8999; p++) {
+    if (!usedPorts.has(p)) return p;
+  }
+  for (let p = 30000; p <= 32000; p++) {
+    if (!usedPorts.has(p)) return p;
+  }
+  throw new PanelRequestError("no free listen port found for new inbound");
 }
 
 function parseSubIdFromInboundBody(inboundBody: Record<string, unknown>): string {
@@ -282,56 +347,61 @@ export function resolveVlessShareLink(input: {
 export async function provisionChainClientAccess(
   input: ProvisionChainClientAccessInput,
 ): Promise<ChainClientAccessResult> {
-  const base = panelBaseForProvision(input.panelBaseUrl);
-  const fetchFn = input.fetchFn ?? fetch;
+  return withPanelTlsInsecureHttpFallback(input.panelBaseUrl, async (base) => {
+    const fetchFn = input.fetchFn ?? fetch;
 
-  const loginUrl = new URL("login", base).href;
-  const loginBody = new URLSearchParams({
-    username: input.adminUsername,
-    password: input.adminPassword,
-    twoFactorCode: "",
+    const loginUrl = new URL("login", base).href;
+    const loginBody = new URLSearchParams({
+      username: input.adminUsername,
+      password: input.adminPassword,
+      twoFactorCode: "",
+    });
+
+    const loginResponse = await fetchFn(loginUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        accept: "application/json",
+      },
+      body: loginBody.toString(),
+    });
+
+    const scLines = readSetCookieLines(loginResponse.headers);
+
+    const loginJson = await readPanelJson(loginResponse);
+    requireSuccess(loginJson, "login failed");
+
+    const cookieHeader = extractSessionCookieHeader(scLines);
+    if (!cookieHeader) {
+      throw new PanelRequestError("login succeeded but session cookie (3x-ui) was not set");
+    }
+
+    const usedPorts = await fetchInboundUsedPorts({ panelApiBase: base, cookieHeader, fetchFn });
+    const listenPort = pickFreeListenPort(usedPorts);
+    const inboundBody: Record<string, unknown> = { ...input.inboundBody, port: listenPort };
+
+    const addUrl = new URL("panel/api/inbounds/add", base).href;
+    const addResponse = await fetchFn(addUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        cookie: cookieHeader,
+      },
+      body: JSON.stringify(inboundBody),
+    });
+
+    const addJson = await readPanelJson(addResponse);
+    requireSuccess(addJson, "add inbound failed");
+
+    const subId = parseSubIdFromInboundBody(inboundBody);
+    const subscriptionUrl = buildSubscriptionUrl(base, subId);
+    const vlessShareLink = resolveVlessShareLink({
+      panelBaseUrl: base,
+      inboundBody,
+      addJson,
+    });
+
+    return { vlessShareLink, subscriptionUrl };
   });
-
-  const loginResponse = await fetchFn(loginUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-      accept: "application/json",
-    },
-    body: loginBody.toString(),
-  });
-
-  const scLines = readSetCookieLines(loginResponse.headers);
-
-  const loginJson = await readPanelJson(loginResponse);
-  requireSuccess(loginJson, "login failed");
-
-  const cookieHeader = extractSessionCookieHeader(scLines);
-  if (!cookieHeader) {
-    throw new PanelRequestError("login succeeded but session cookie (3x-ui) was not set");
-  }
-
-  const addUrl = new URL("panel/api/inbounds/add", base).href;
-  const addResponse = await fetchFn(addUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-      cookie: cookieHeader,
-    },
-    body: JSON.stringify(input.inboundBody),
-  });
-
-  const addJson = await readPanelJson(addResponse);
-  requireSuccess(addJson, "add inbound failed");
-
-  const subId = parseSubIdFromInboundBody(input.inboundBody);
-  const subscriptionUrl = buildSubscriptionUrl(base, subId);
-  const vlessShareLink = resolveVlessShareLink({
-    panelBaseUrl: base,
-    inboundBody: input.inboundBody,
-    addJson,
-  });
-
-  return { vlessShareLink, subscriptionUrl };
 }
