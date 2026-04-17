@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Requires bash 4+ (uses mapfile). Target: Linux hosts with ufw + 3x-ui.
 set -euo pipefail
 
 # Managed UFW comments must contain this substring (see design spec).
@@ -31,7 +32,11 @@ delete_managed() {
   # Delete by rule number from highest to lowest so indices stay valid.
   while true; do
     mapfile -t nums < <(ufw status numbered 2>/dev/null | awk -F'[][]' -v t="$TAG" '
-      $0 ~ t && $2 ~ /^[0-9]+$/ { print $2 }
+      $0 ~ t {
+        n = $2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", n)
+        if (n ~ /^[0-9]+$/) print n
+      }
     ' | sort -unr)
     if [ "${#nums[@]}" -eq 0 ]; then
       break
