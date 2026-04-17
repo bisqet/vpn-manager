@@ -8,6 +8,7 @@ import { migrate } from "../db/migrate";
 import type { Env } from "../env";
 import { createApp } from "../index";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
+import { runPanelReachabilityProbe } from "../net/panelReachabilityProbe";
 import { executeProfileSetup } from "../vpn/setupRunner";
 import type { SshExecFn } from "../vpn/sshExec";
 
@@ -15,11 +16,12 @@ async function seedWorkingProfileAfterInstall(
   db: Database,
   masterKey: Uint8Array,
   profileId: number,
-  opts: { webBasePath?: string; adminUsername?: string; adminPassword?: string } = {},
+  opts: { webBasePath?: string; adminUsername?: string; adminPassword?: string; panelPort?: number | null } = {},
 ) {
   const webBasePath = opts.webBasePath ?? "webpath123456789012";
   const adminUsername = opts.adminUsername ?? "paneluserabc";
   const adminPassword = opts.adminPassword ?? "panelpassxyz";
+  const panelPort = opts.panelPort !== undefined ? opts.panelPort : null;
   const { ciphertext, nonce } = await encryptXuiSecretsJson(masterKey, {
     v: 1,
     adminUsername,
@@ -31,11 +33,12 @@ async function seedWorkingProfileAfterInstall(
       xui_secrets_ciphertext = ?,
       xui_secrets_nonce = ?,
       xui_web_base_path = ?,
+      xui_panel_port = ?,
       last_setup_error = NULL,
       last_setup_at = datetime('now'),
       updated_at = datetime('now')
     WHERE id = ?`,
-  ).run(ciphertext, nonce, webBasePath, profileId);
+  ).run(ciphertext, nonce, webBasePath, panelPort, profileId);
 }
 
 type ProfileRow = {
@@ -94,8 +97,16 @@ describe("profilesRoutes", () => {
       }),
     });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { panelHostname: string };
+    const body = (await res.json()) as {
+      panelHostname: string;
+      panelReachability: string;
+      panelReachabilityDetail: string | null;
+      panelReachabilityCheckedAt: string | null;
+    };
     expect(body.panelHostname).toBe("203.0.113.20");
+    expect(body.panelReachability).toBe("checking");
+    expect(body.panelReachabilityDetail).toBeNull();
+    expect(body.panelReachabilityCheckedAt).toBeNull();
   });
 
   test("rejects create when panelHostname omitted and host is not public IP", async () => {
@@ -176,6 +187,9 @@ describe("profilesRoutes", () => {
       panelHostname: "panel.vpn.example.com",
       operationalStatus: "pending",
       lastSetupError: null,
+      panelReachability: "checking",
+      panelReachabilityDetail: null,
+      panelReachabilityCheckedAt: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
       panelUrl: null,
@@ -224,8 +238,11 @@ describe("profilesRoutes", () => {
       sshPort: 22,
       sshUser: "root",
       panelHostname: "panel.vpn.example.com",
-      operationalStatus: "working",
+      operationalStatus: "pending",
       lastSetupError: null,
+      panelReachability: "checking",
+      panelReachabilityDetail: null,
+      panelReachabilityCheckedAt: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
       panelUrl: null,
@@ -260,8 +277,11 @@ describe("profilesRoutes", () => {
       sshPort: 22,
       sshUser: "root",
       panelHostname: "panel.vpn.example.com",
-      operationalStatus: "working",
+      operationalStatus: "pending",
       lastSetupError: null,
+      panelReachability: "checking",
+      panelReachabilityDetail: null,
+      panelReachabilityCheckedAt: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
       panelUrl: null,
@@ -570,8 +590,8 @@ describe("profilesRoutes", () => {
     });
 
     const dbRow = db
-      .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
-        "SELECT panel_hostname, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      .query<{ panel_hostname: string; xui_web_base_path: string | null; xui_panel_port: number | null }, []>(
+        "SELECT panel_hostname, xui_web_base_path, xui_panel_port FROM vpn_profiles WHERE id = 1",
       )
       .get();
     expect(dbRow).toBeDefined();
@@ -588,7 +608,46 @@ describe("profilesRoutes", () => {
     expect(body.adminUsername).toBe("paneluserabc");
     expect(body.adminPassword).toBe("panelpassxyz");
     expect(body.panelUrl.length).toBeGreaterThan(0);
-    expect(body.panelUrl).toBe(buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path));
+    expect(body.panelUrl).toBe(
+      buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path, dbRow!.xui_panel_port),
+    );
+  });
+
+  test("GET /api/profiles/:id/panel-login panelUrl includes stored xui_panel_port", async () => {
+    putTestAppSettings(db, {
+      acmeEmail: "ops@example.com",
+      vpnSshEnabled: true,
+      sshKnownHostsFile: null,
+    });
+    const app = createApp(db, env);
+
+    await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Porty",
+        host: "10.0.0.2",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "secretpw",
+        panelHostname: "203.0.113.55",
+      }),
+    });
+
+    await seedWorkingProfileAfterInstall(db, env.masterKey, 1, {
+      webBasePath: "xUiDocBase18char",
+      panelPort: 45543,
+    });
+
+    const loginRes = await app.request("/api/profiles/1/panel-login", {
+      headers: { Cookie: `${SESSION_COOKIE}=session-token` },
+    });
+    expect(loginRes.status).toBe(200);
+    const body = (await loginRes.json()) as { panelUrl: string };
+    expect(body.panelUrl).toBe("https://203.0.113.55:45543/xUiDocBase18char/");
   });
 
   test("GET /api/profiles/:id/panel-login returns 404 when profile missing", async () => {
@@ -655,8 +714,8 @@ describe("profilesRoutes", () => {
     await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     const dbRow = db
-      .query<{ panel_hostname: string; xui_web_base_path: string | null }, []>(
-        "SELECT panel_hostname, xui_web_base_path FROM vpn_profiles WHERE id = 1",
+      .query<{ panel_hostname: string; xui_web_base_path: string | null; xui_panel_port: number | null }, []>(
+        "SELECT panel_hostname, xui_web_base_path, xui_panel_port FROM vpn_profiles WHERE id = 1",
       )
       .get();
     expect(dbRow).toBeDefined();
@@ -667,7 +726,7 @@ describe("profilesRoutes", () => {
     expect(listRes.status).toBe(200);
     const listed = (await listRes.json()) as { panelUrl: string | null }[];
     expect(listed[0]!.panelUrl).toBe(
-      buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path),
+      buildPanelHttpsUrl(dbRow!.panel_hostname, dbRow!.xui_web_base_path, dbRow!.xui_panel_port),
     );
   });
 
@@ -728,7 +787,189 @@ describe("profilesRoutes", () => {
     expect(body.panelHostname).toBe("198.51.100.3");
   });
 
-  test("PATCH runs placeholder verify and sets operationalStatus working", async () => {
+  test("POST persists optional panel secrets and probe updates stored reachability", async () => {
+    const app = createApp(db, env, {
+      profiles: {
+        reachabilityProbeRunner: async (o) => {
+          await runPanelReachabilityProbe({
+            ...o,
+            fetchFn: async () => new Response(null, { status: 401 }),
+          });
+        },
+      },
+    });
+
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Panel Secret",
+        host: "vpn.example.com",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "hunter2",
+        panelHostname: "panel.vpn.example.com",
+        panelAdminUsername: " admin-user ",
+        panelAdminPassword: " admin-pass ",
+        panelWebBasePath: " admin ",
+        panelHttpsPort: 8443,
+      }),
+    });
+
+    expect(createRes.status).toBe(201);
+    const body = (await createRes.json()) as {
+      panelReachability: string;
+      panelReachabilityDetail: string | null;
+      panelReachabilityCheckedAt: string | null;
+    };
+    expect(body.panelReachability).toBe("checking");
+    expect(body.panelReachabilityDetail).toBeNull();
+    expect(body.panelReachabilityCheckedAt).toBeNull();
+
+    const row = db
+      .query<
+        {
+          xui_secrets_ciphertext: Uint8Array | null;
+          xui_secrets_nonce: Uint8Array | null;
+          xui_web_base_path: string | null;
+          xui_panel_port: number | null;
+          panel_reachability: string;
+          panel_reachability_detail: string | null;
+          panel_reachability_checked_at: string | null;
+        },
+        [number]
+      >(
+        `SELECT
+          xui_secrets_ciphertext,
+          xui_secrets_nonce,
+          xui_web_base_path,
+          xui_panel_port,
+          panel_reachability,
+          panel_reachability_detail,
+          panel_reachability_checked_at
+        FROM vpn_profiles
+        WHERE id = ?`,
+      )
+      .get(1);
+    expect(row).toBeDefined();
+    expect(row!.xui_secrets_ciphertext).not.toBeNull();
+    expect(row!.xui_secrets_nonce).not.toBeNull();
+    expect(row!.xui_web_base_path).toBe("/admin");
+    expect(row!.xui_panel_port).toBe(8443);
+    expect(row!.panel_reachability).toBe("reachable");
+    expect(row!.panel_reachability_detail).toBeNull();
+    expect(row!.panel_reachability_checked_at).toEqual(expect.any(String));
+  });
+
+  test("PATCH updates panel fields, keeps empty panel password omitted, and rechecks reachability", async () => {
+    const app = createApp(db, env, {
+      profiles: {
+        reachabilityProbeRunner: async (o) => {
+          await runPanelReachabilityProbe({
+            ...o,
+            fetchFn: async () => new Response(null, { status: 401 }),
+          });
+        },
+      },
+    });
+
+    const createRes = await app.request("/api/profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        label: "Patch Panel",
+        host: "vpn.example.com",
+        sshPort: 22,
+        sshUser: "root",
+        sshPassword: "hunter2",
+        panelHostname: "panel.vpn.example.com",
+        panelAdminUsername: "admin-user",
+        panelAdminPassword: "admin-pass",
+        panelWebBasePath: "admin",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
+    const before = db
+      .query<
+        {
+          xui_secrets_ciphertext: Uint8Array | null;
+          xui_secrets_nonce: Uint8Array | null;
+        },
+        [number]
+      >("SELECT xui_secrets_ciphertext, xui_secrets_nonce FROM vpn_profiles WHERE id = ?")
+      .get(1);
+    expect(before?.xui_secrets_ciphertext).not.toBeNull();
+    expect(before?.xui_secrets_nonce).not.toBeNull();
+
+    const patchRes = await app.request("/api/profiles/1", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `${SESSION_COOKIE}=session-token`,
+      },
+      body: JSON.stringify({
+        panelWebBasePath: "next-base",
+        panelHttpsPort: 9443,
+        panelAdminUsername: "next-user",
+        panelAdminPassword: "next-pass",
+      }),
+    });
+
+    expect(patchRes.status).toBe(200);
+    const body = (await patchRes.json()) as {
+      panelReachability: string;
+      panelReachabilityDetail: string | null;
+      panelReachabilityCheckedAt: string | null;
+    };
+    expect(body.panelReachability).toBe("checking");
+    expect(body.panelReachabilityDetail).toBeNull();
+    expect(body.panelReachabilityCheckedAt).toBeNull();
+
+    const after = db
+      .query<
+        {
+          xui_secrets_ciphertext: Uint8Array | null;
+          xui_secrets_nonce: Uint8Array | null;
+          xui_web_base_path: string | null;
+          xui_panel_port: number | null;
+          panel_reachability: string;
+          panel_reachability_detail: string | null;
+          panel_reachability_checked_at: string | null;
+        },
+        [number]
+      >(
+        `SELECT
+          xui_secrets_ciphertext,
+          xui_secrets_nonce,
+          xui_web_base_path,
+          xui_panel_port,
+          panel_reachability,
+          panel_reachability_detail,
+          panel_reachability_checked_at
+        FROM vpn_profiles
+        WHERE id = ?`,
+      )
+      .get(1);
+    expect(after).toBeDefined();
+    expect(after!.xui_secrets_ciphertext).not.toBeNull();
+    expect(after!.xui_secrets_nonce).not.toBeNull();
+    expect(after!.xui_secrets_ciphertext).not.toEqual(before!.xui_secrets_ciphertext);
+    expect(after!.xui_secrets_nonce).not.toEqual(before!.xui_secrets_nonce);
+    expect(after!.xui_web_base_path).toBe("/next-base");
+    expect(after!.xui_panel_port).toBe(9443);
+    expect(after!.panel_reachability).toBe("reachable");
+    expect(after!.panel_reachability_detail).toBeNull();
+    expect(after!.panel_reachability_checked_at).toEqual(expect.any(String));
+  });
+
+  test("PATCH updates fields without changing operationalStatus from pending", async () => {
     const app = createApp(db, env);
     await app.request("/api/profiles", {
       method: "POST",
@@ -756,7 +997,7 @@ describe("profilesRoutes", () => {
     });
     expect(patchRes.status).toBe(200);
     const body = await patchRes.json();
-    expect(body.operationalStatus).toBe("working");
+    expect(body.operationalStatus).toBe("pending");
   });
 
   async function insertVpnProfileId1ForSsh(database: Database) {
@@ -1005,7 +1246,7 @@ describe("profilesRoutes", () => {
       teardown: { mode: string; phases: { id: string }[] };
     };
     expect(body.teardown.mode).toBe("dry-run");
-    expect(body.teardown.phases[0]?.id).toBe("stop_xui");
+    expect(body.teardown.phases[0]?.id).toBe("x_ui_uninstall");
 
     const row = db
       .query<{ operational_status: string; xui_web_base_path: string | null }, []>(
@@ -1088,12 +1329,21 @@ describe("profilesRoutes", () => {
     expect(body.profile.operationalStatus).toBe("pending");
 
     const row = db
-      .query<{ operational_status: string; xui_web_base_path: string | null; last_setup_error: string | null }, []>(
-        "SELECT operational_status, xui_web_base_path, last_setup_error FROM vpn_profiles WHERE id = 1",
+      .query<
+        {
+          operational_status: string;
+          xui_web_base_path: string | null;
+          xui_panel_port: number | null;
+          last_setup_error: string | null;
+        },
+        []
+      >(
+        "SELECT operational_status, xui_web_base_path, xui_panel_port, last_setup_error FROM vpn_profiles WHERE id = 1",
       )
       .get();
     expect(row?.operational_status).toBe("pending");
     expect(row?.xui_web_base_path).toBeNull();
+    expect(row?.xui_panel_port).toBeNull();
     expect(row?.last_setup_error).toBeNull();
   });
 
@@ -1104,13 +1354,8 @@ describe("profilesRoutes", () => {
       sshKnownHostsFile: null,
     });
     let teardownPhase: "setup" | "clear" = "setup";
-    let clearCallIndex = 0;
     const fakeSsh: SshExecFn = async () => {
       if (teardownPhase === "setup") {
-        return { code: 0, stdout: "ok", stderr: "" };
-      }
-      clearCallIndex += 1;
-      if (clearCallIndex === 1) {
         return { code: 0, stdout: "ok", stderr: "" };
       }
       return { code: 1, stdout: "", stderr: "boom" };
@@ -1136,7 +1381,6 @@ describe("profilesRoutes", () => {
     await seedWorkingProfileAfterInstall(db, env.masterKey, 1);
 
     teardownPhase = "clear";
-    clearCallIndex = 0;
 
     const clearRes = await app.request("/api/profiles/1/clear-server", {
       method: "POST",

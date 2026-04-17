@@ -6,13 +6,13 @@ import { getCookie } from "hono/cookie";
 import type { UpgradeWebSocket } from "hono/ws";
 import { SESSION_COOKIE } from "../auth/cookie";
 import { getSessionUserId } from "../auth/session";
-import { decryptXuiSecretsJson } from "../crypto/xuiSecrets";
+import { decryptXuiSecretsJson, encryptXuiSecretsJson } from "../crypto/xuiSecrets";
 import { encryptVpnPassword } from "../crypto/vpnSecret";
 import type { Env } from "../env";
 import { getAppSettings } from "../db/appSettings";
+import { runPanelReachabilityProbe, schedulePanelReachabilityProbe } from "../net/panelReachabilityProbe";
 import { buildPanelHttpsUrl, resolvePanelHostname } from "../net/panelAddress";
 import { vpnProfileCreate, vpnProfileUpdate } from "../types";
-import { verifyProfileHealthPlaceholder } from "../vpn/profileOperationalPlaceholder";
 import { createProfileSetupTerminalWebSocketHandlers } from "../vpn/profileSetupTerminalBridge";
 import { resolveProfileSetupTerminal } from "../vpn/profileSetupTerminalGate";
 import { createProfileSshWebSocketHandlers } from "../vpn/profileSshBridge";
@@ -31,6 +31,10 @@ type VpnProfileRow = {
   panel_hostname: string;
   last_setup_error: string | null;
   xui_web_base_path: string | null;
+  xui_panel_port: number | null;
+  panel_reachability: string;
+  panel_reachability_detail: string | null;
+  panel_reachability_checked_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -38,6 +42,8 @@ type VpnProfileRow = {
 type VpnProfileSecretRow = VpnProfileRow & {
   ssh_password_ciphertext: Uint8Array;
   ssh_password_nonce: Uint8Array;
+  xui_secrets_ciphertext: Uint8Array | null;
+  xui_secrets_nonce: Uint8Array | null;
 };
 
 type ProfilesEnv = Pick<Env, "masterKey">;
@@ -45,12 +51,19 @@ type ProfilesEnv = Pick<Env, "masterKey">;
 export type ProfilesRoutesOptions = {
   sshExec?: SshExecFn;
   upgradeWebSocket?: UpgradeWebSocket;
+  reachabilityProbeRunner?: (opts: {
+    db: Database;
+    profileId: number;
+    fetchFn?: typeof fetch;
+  }) => void | Promise<void>;
 };
 
 function toProfileDto(row: VpnProfileRow, userId: number | null) {
+  const panelPort =
+    row.xui_panel_port == null ? null : Number(row.xui_panel_port);
   const panelUrl =
     userId !== null && row.operational_status === "working"
-      ? buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path)
+      ? buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path, panelPort)
       : null;
   return {
     id: row.id,
@@ -61,6 +74,9 @@ function toProfileDto(row: VpnProfileRow, userId: number | null) {
     panelHostname: row.panel_hostname,
     operationalStatus: row.operational_status as "pending" | "working",
     lastSetupError: row.last_setup_error ?? null,
+    panelReachability: row.panel_reachability as "unknown" | "checking" | "reachable" | "unreachable",
+    panelReachabilityDetail: row.panel_reachability_detail ?? null,
+    panelReachabilityCheckedAt: row.panel_reachability_checked_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     panelUrl,
@@ -84,6 +100,19 @@ function parseId(idParam: string): number | null {
   return id;
 }
 
+function normalizeWebBasePath(raw: string | undefined): string | null {
+  if (raw === undefined) {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return null;
+  }
+
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
   return (
     db
@@ -98,8 +127,14 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
           panel_hostname,
           last_setup_error,
           xui_web_base_path,
+          xui_panel_port,
+          panel_reachability,
+          panel_reachability_detail,
+          panel_reachability_checked_at,
           ssh_password_ciphertext,
           ssh_password_nonce,
+          xui_secrets_ciphertext,
+          xui_secrets_nonce,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -112,6 +147,11 @@ function getProfileById(db: Database, id: number): VpnProfileSecretRow | null {
 export function profilesRoutes(db: Database, env: ProfilesEnv, options: ProfilesRoutesOptions = {}) {
   const app = new Hono();
   const uw = options.upgradeWebSocket ?? upgradeWebSocket;
+  const runReachability =
+    options.reachabilityProbeRunner ??
+    ((o: { db: Database; profileId: number; fetchFn?: typeof fetch }) => {
+      void runPanelReachabilityProbe(o);
+    });
 
   app.get("/", (c) => {
     const token = getCookie(c, SESSION_COOKIE);
@@ -128,6 +168,10 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           panel_hostname,
           last_setup_error,
           xui_web_base_path,
+          xui_panel_port,
+          panel_reachability,
+          panel_reachability_detail,
+          panel_reachability_checked_at,
           created_at,
           updated_at
         FROM vpn_profiles
@@ -155,7 +199,18 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       return c.json({ error: "Invalid VPN profile payload", details: parsed.error.flatten() }, 400);
     }
 
-    const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
+    const {
+      label,
+      host,
+      sshPort,
+      sshUser,
+      sshPassword,
+      panelHostname,
+      panelAdminUsername,
+      panelAdminPassword,
+      panelWebBasePath,
+      panelHttpsPort,
+    } = parsed.data;
     const hostTrimmed = host.trim();
     const panelRaw = panelHostname?.trim() ?? "";
     const resolved = resolvePanelHostname({ host: hostTrimmed, panel: panelRaw });
@@ -164,6 +219,21 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     }
 
     const { ciphertext, nonce } = await encryptVpnPassword(env.masterKey, sshPassword);
+    const webPath = normalizeWebBasePath(panelWebBasePath);
+    const panelPort = panelHttpsPort ?? null;
+    const adminUsername = (panelAdminUsername ?? "").trim();
+    const adminPassword = (panelAdminPassword ?? "").trim();
+    let xuiCiphertext: Uint8Array | null = null;
+    let xuiNonce: Uint8Array | null = null;
+    if (adminUsername !== "" && adminPassword !== "") {
+      const encryptedXuiSecrets = await encryptXuiSecretsJson(env.masterKey, {
+        v: 1,
+        adminUsername,
+        adminPassword,
+      });
+      xuiCiphertext = encryptedXuiSecrets.ciphertext;
+      xuiNonce = encryptedXuiSecrets.nonce;
+    }
 
     const result = db
       .query(
@@ -174,12 +244,37 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
           ssh_user,
           ssh_password_ciphertext,
           ssh_password_nonce,
-          panel_hostname
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          panel_hostname,
+          xui_secrets_ciphertext,
+          xui_secrets_nonce,
+          xui_web_base_path,
+          xui_panel_port,
+          panel_reachability,
+          panel_reachability_detail,
+          panel_reachability_checked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'checking', NULL, NULL)`,
       )
-      .run(label, hostTrimmed, sshPort, sshUser, ciphertext, nonce, resolved.panel);
+      .run(
+        label,
+        hostTrimmed,
+        sshPort,
+        sshUser,
+        ciphertext,
+        nonce,
+        resolved.panel,
+        xuiCiphertext,
+        xuiNonce,
+        webPath,
+        panelPort,
+      );
 
-    const created = getProfileById(db, Number(result.lastInsertRowid));
+    const newId = Number(result.lastInsertRowid);
+    const created = getProfileById(db, newId);
+    if (options.reachabilityProbeRunner) {
+      await Promise.resolve(runReachability({ db, profileId: newId }));
+    } else {
+      schedulePanelReachabilityProbe({ db, profileId: newId });
+    }
     const sessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
     return c.json(toProfileDto(created!, sessionUserId), 201);
   });
@@ -330,13 +425,27 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
     if (body && typeof body === "object" && body.sshPassword === "") {
       delete body.sshPassword;
     }
+    if (body && typeof body === "object" && body.panelAdminPassword === "") {
+      delete body.panelAdminPassword;
+    }
 
     const parsed = vpnProfileUpdate.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: "Invalid VPN profile payload", details: parsed.error.flatten() }, 400);
     }
 
-    const { label, host, sshPort, sshUser, sshPassword, panelHostname } = parsed.data;
+    const {
+      label,
+      host,
+      sshPort,
+      sshUser,
+      sshPassword,
+      panelHostname,
+      panelAdminUsername,
+      panelAdminPassword,
+      panelWebBasePath,
+      panelHttpsPort,
+    } = parsed.data;
 
     const mergedHost = (host ?? existing.host).trim();
     const mergedPanelRaw =
@@ -354,6 +463,38 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       nonce = encrypted.nonce;
     }
 
+    const mergedWebPath =
+      panelWebBasePath !== undefined ? normalizeWebBasePath(panelWebBasePath) : existing.xui_web_base_path;
+    const existingComparableWebPath = normalizeWebBasePath(existing.xui_web_base_path ?? undefined);
+    const mergedComparableWebPath = normalizeWebBasePath(mergedWebPath ?? undefined);
+    const mergedPanelPort = panelHttpsPort !== undefined ? panelHttpsPort : existing.xui_panel_port;
+    let xuiCiphertext = existing.xui_secrets_ciphertext;
+    let xuiNonce = existing.xui_secrets_nonce;
+    let secretsChanged = false;
+    const adminUsername = (panelAdminUsername ?? "").trim();
+    const adminPassword = (panelAdminPassword ?? "").trim();
+    if (adminUsername !== "" && adminPassword !== "") {
+      const encryptedSecrets = await encryptXuiSecretsJson(env.masterKey, {
+        v: 1,
+        adminUsername,
+        adminPassword,
+      });
+      xuiCiphertext = encryptedSecrets.ciphertext;
+      xuiNonce = encryptedSecrets.nonce;
+      secretsChanged = true;
+    }
+    const panelTouched =
+      resolved.panel !== existing.panel_hostname.trim() ||
+      mergedComparableWebPath !== existingComparableWebPath ||
+      mergedPanelPort !== existing.xui_panel_port ||
+      secretsChanged;
+    const resetReachabilityClause = panelTouched
+      ? `,
+        panel_reachability = 'checking',
+        panel_reachability_detail = NULL,
+        panel_reachability_checked_at = NULL`
+      : "";
+
     db.query(
       `UPDATE vpn_profiles
       SET
@@ -364,7 +505,11 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
         ssh_password_ciphertext = ?,
         ssh_password_nonce = ?,
         panel_hostname = ?,
-        updated_at = datetime('now')
+        xui_web_base_path = ?,
+        xui_panel_port = ?,
+        xui_secrets_ciphertext = ?,
+        xui_secrets_nonce = ?,
+        updated_at = datetime('now')${resetReachabilityClause}
       WHERE id = ?`,
     ).run(
       label ?? existing.label,
@@ -374,15 +519,21 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       ciphertext,
       nonce,
       resolved.panel,
+      mergedWebPath,
+      mergedPanelPort,
+      xuiCiphertext,
+      xuiNonce,
       id,
     );
 
-    const nextStatus = await verifyProfileHealthPlaceholder();
-    db.query(
-      "UPDATE vpn_profiles SET operational_status = ?, updated_at = datetime('now') WHERE id = ?",
-    ).run(nextStatus, id);
-
     const updated = getProfileById(db, id);
+    if (panelTouched) {
+      if (options.reachabilityProbeRunner) {
+        await Promise.resolve(runReachability({ db, profileId: id }));
+      } else {
+        schedulePanelReachabilityProbe({ db, profileId: id });
+      }
+    }
     const patchSessionUserId = getSessionUserId(db, getCookie(c, SESSION_COOKIE));
     return c.json(toProfileDto(updated!, patchSessionUserId));
   });
@@ -474,12 +625,13 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
             operational_status: string;
             panel_hostname: string;
             xui_web_base_path: string | null;
+            xui_panel_port: number | null;
             xui_secrets_ciphertext: Uint8Array | null;
             xui_secrets_nonce: Uint8Array | null;
           },
           [number]
         >(
-          `SELECT operational_status, panel_hostname, xui_web_base_path,
+          `SELECT operational_status, panel_hostname, xui_web_base_path, xui_panel_port,
                 xui_secrets_ciphertext, xui_secrets_nonce
          FROM vpn_profiles WHERE id = ?`,
         )
@@ -506,7 +658,8 @@ export function profilesRoutes(db: Database, env: ProfilesEnv, options: Profiles
       return c.json({ error: "Panel credentials are not available for this profile" }, 409);
     }
 
-    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path);
+    const panelPort = row.xui_panel_port == null ? null : Number(row.xui_panel_port);
+    const panelUrl = buildPanelHttpsUrl(row.panel_hostname, row.xui_web_base_path, panelPort);
     if (!panelUrl) {
       return c.json({ error: "Panel credentials are not available for this profile" }, 409);
     }
