@@ -25,7 +25,7 @@ function normalizePanelBaseUrl(panelBaseUrl: string): string {
 }
 
 /** When `VPN_MANAGER_PANEL_TLS_INSECURE` is true/1/yes, use `http://` instead of `https://` for panel API calls. */
-function panelBaseForProvision(panelBaseUrl: string): string {
+export function panelBaseForProvision(panelBaseUrl: string): string {
   const normalized = normalizePanelBaseUrl(panelBaseUrl);
   const v = process.env.VPN_MANAGER_PANEL_TLS_INSECURE?.trim().toLowerCase();
   if ((v === "1" || v === "true" || v === "yes") && normalized.startsWith("https://")) {
