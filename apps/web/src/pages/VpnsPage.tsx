@@ -19,6 +19,11 @@ type VpnProfile = {
   panelUrl: string | null;
   operationalStatus: "pending" | "working";
   lastSetupError: string | null;
+  panelReachability: "unknown" | "checking" | "reachable" | "unreachable";
+  panelReachabilityDetail: string | null;
+  panelReachabilityCheckedAt: string | null;
+  panelWebBasePath: string | null;
+  panelHttpsPort: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -48,7 +53,25 @@ type ProfileFormValues = {
   sshPort: string;
   sshUser: string;
   panelHostname: string;
+  panelAdminUsername: string;
+  panelAdminPassword: string;
+  panelWebBasePath: string;
+  panelHttpsPort: string;
   sshPassword: string;
+};
+
+/** Output of `validateFormValues` success branch (create + edit). */
+type ValidatedProfilePayload = {
+  label: string;
+  host: string;
+  sshPort: number;
+  sshUser: string;
+  sshPassword: string;
+  panelHostname?: string;
+  panelAdminUsername?: string;
+  panelAdminPassword?: string;
+  panelWebBasePath?: string;
+  panelHttpsPort?: number;
 };
 
 type ModalState =
@@ -62,6 +85,10 @@ const emptyFormValues: ProfileFormValues = {
   sshPort: "22",
   sshUser: "",
   panelHostname: "",
+  panelAdminUsername: "",
+  panelAdminPassword: "",
+  panelWebBasePath: "",
+  panelHttpsPort: "",
   sshPassword: "",
 };
 
@@ -79,6 +106,10 @@ function createProfile(payload: {
   /** Omitted when SSH host is a public IP and panel is left empty (server derives). */
   panelHostname?: string;
   sshPassword: string;
+  panelAdminUsername?: string;
+  panelAdminPassword?: string;
+  panelWebBasePath?: string;
+  panelHttpsPort?: number;
 }) {
   return apiFetch<VpnProfile>("/api/profiles", {
     method: "POST",
@@ -95,6 +126,10 @@ function updateProfile(
     sshUser: string;
     panelHostname?: string;
     sshPassword?: string;
+    panelAdminUsername?: string;
+    panelAdminPassword?: string;
+    panelWebBasePath?: string;
+    panelHttpsPort?: number;
   },
 ) {
   return apiFetch<VpnProfile>(`/api/profiles/${id}`, {
@@ -143,6 +178,11 @@ function getInitialValues(modalState: ModalState): ProfileFormValues {
     sshPort: String(modalState.profile.sshPort),
     sshUser: modalState.profile.sshUser,
     panelHostname: modalState.profile.panelHostname,
+    panelAdminUsername: "",
+    panelAdminPassword: "",
+    panelWebBasePath: modalState.profile.panelWebBasePath?.trim() ?? "",
+    panelHttpsPort:
+      modalState.profile.panelHttpsPort != null ? String(modalState.profile.panelHttpsPort) : "",
     sshPassword: "",
   };
 }
@@ -170,6 +210,10 @@ function validateFormValues(
   const panelHostname = values.panelHostname.trim();
   const sshPassword = values.sshPassword.trim();
   const sshPort = Number(values.sshPort);
+  const panelAdminUsername = values.panelAdminUsername.trim();
+  const panelAdminPassword = values.panelAdminPassword.trim();
+  const panelWebBasePath = values.panelWebBasePath.trim();
+  const panelHttpsPortRaw = values.panelHttpsPort.trim();
 
   if (!label || !host || !sshUser) {
     return { error: "Label, IP or Host, and SSH user are required." };
@@ -192,17 +236,55 @@ function validateFormValues(
   }
 
   if (requirePassword && sshPassword === "") {
-    return { error: "SSH password is required for new profiles." };
+    return { error: "SSH password is required for new servers." };
+  }
+
+  const panelAdminUserEmpty = panelAdminUsername === "";
+  const panelAdminPassEmpty = panelAdminPassword === "";
+  if (panelAdminUserEmpty !== panelAdminPassEmpty) {
+    return {
+      error: "Panel login and Panel password must both be filled or both left empty.",
+    };
+  }
+
+  let panelHttpsPort: number | undefined;
+  if (panelHttpsPortRaw !== "") {
+    const p = Number(panelHttpsPortRaw);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) {
+      return { error: "Panel HTTPS port must be an integer between 1 and 65535." };
+    }
+    panelHttpsPort = p;
   }
 
   const base = { label, host, sshPort, sshUser, sshPassword };
+  const extras: {
+    panelHostname?: string;
+    panelAdminUsername?: string;
+    panelAdminPassword?: string;
+    panelWebBasePath?: string;
+    panelHttpsPort?: number;
+  } = {};
+
   if (panelHostname !== "") {
-    return { payload: { ...base, panelHostname } };
+    extras.panelHostname = panelHostname;
+  } else if (formMode === "edit") {
+    extras.panelHostname = "";
   }
-  if (formMode === "edit") {
-    return { payload: { ...base, panelHostname: "" } };
+
+  if (!panelAdminUserEmpty && !panelAdminPassEmpty) {
+    extras.panelAdminUsername = panelAdminUsername;
+    extras.panelAdminPassword = panelAdminPassword;
   }
-  return { payload: { ...base } };
+
+  if (panelWebBasePath !== "") {
+    extras.panelWebBasePath = panelWebBasePath;
+  }
+
+  if (panelHttpsPort !== undefined) {
+    extras.panelHttpsPort = panelHttpsPort;
+  }
+
+  return { payload: { ...base, ...extras } };
 }
 
 function hasValidationError(
@@ -438,7 +520,7 @@ function SshTerminalSheet({ profile, onClose }: SshTerminalSheetProps) {
           if (reason) {
             setDisconnectHint(
               ev.code === 1011
-                ? `The API could not complete SSH to this profile's host: ${reason}`
+                ? `The API could not complete SSH to this server's host: ${reason}`
                 : reason,
             );
           } else {
@@ -647,7 +729,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
         if (reason) {
           setDisconnectHint(
             ev.code === 1011
-              ? `The API could not complete SSH to this profile's host: ${reason}`
+              ? `The API could not complete SSH to this server's host: ${reason}`
               : reason,
           );
         } else {
@@ -748,7 +830,7 @@ function SetupTerminalSheet({ profile, onClose, onRunFinished }: SetupTerminalSh
                 <p
                   style={{ margin: "8px 0 0", maxWidth: "440px", fontSize: "13px", lineHeight: 1.45, opacity: 0.9 }}
                 >
-                  Scroll the terminal above for details. If the profile stayed Pending, open Edit on that profile to
+                  Scroll the terminal above for details. If the server stayed Pending, open Edit on that server to
                   read the last setup error.
                 </p>
               ) : null}
@@ -775,6 +857,13 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   const profilesQuery = useQuery({
     queryKey: profilesQueryKey,
     queryFn: fetchProfiles,
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      if (!rows) {
+        return false;
+      }
+      return rows.some((p) => p.panelReachability === "checking") ? 2000 : false;
+    },
   });
 
   const preflightQuery = useQuery({
@@ -908,22 +997,33 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
     }
 
     if (modalState?.mode === "create") {
-      await createMutation.mutateAsync(result.payload);
+      await createMutation.mutateAsync(result.payload as ValidatedProfilePayload);
       return;
     }
 
     if (modalState?.mode === "edit") {
-      const pl = result.payload;
+      const pl = result.payload as ValidatedProfilePayload;
       const payload: Parameters<typeof updateProfile>[1] = {
         label: pl.label,
         host: pl.host,
         sshPort: pl.sshPort,
         sshUser: pl.sshUser,
-        panelHostname: "panelHostname" in pl ? pl.panelHostname : "",
+        panelHostname: pl.panelHostname !== undefined ? pl.panelHostname : "",
       };
 
-      if (result.payload.sshPassword !== "") {
-        payload.sshPassword = result.payload.sshPassword;
+      if (pl.sshPassword !== "") {
+        payload.sshPassword = pl.sshPassword;
+      }
+
+      if (pl.panelAdminUsername !== undefined && pl.panelAdminPassword !== undefined) {
+        payload.panelAdminUsername = pl.panelAdminUsername;
+        payload.panelAdminPassword = pl.panelAdminPassword;
+      }
+      if (pl.panelWebBasePath !== undefined) {
+        payload.panelWebBasePath = pl.panelWebBasePath;
+      }
+      if (pl.panelHttpsPort !== undefined) {
+        payload.panelHttpsPort = pl.panelHttpsPort;
       }
 
       await updateMutation.mutateAsync({
@@ -934,7 +1034,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   }
 
   async function handleDelete(profile: VpnProfile) {
-    if (!window.confirm(`Delete VPN profile "${profile.label}"?`)) {
+    if (!window.confirm(`Delete VPN server "${profile.label}"?`)) {
       return;
     }
 
@@ -957,7 +1057,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
   async function handleForceDelete(profile: VpnProfile) {
     if (
       !window.confirm(
-        `Delete "${profile.label}" anyway?\n\nThis removes every chain hop that uses this profile (routing rules on those hops are lost), deletes chains that would have no hops left, then deletes the profile. This cannot be undone.`,
+        `Delete "${profile.label}" anyway?\n\nThis removes every chain hop that uses this server (routing rules on those hops are lost), deletes chains that would have no hops left, then deletes the server. This cannot be undone.`,
       )
     ) {
       return;
@@ -1064,7 +1164,7 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
     }
   }
 
-  const modalTitle = modalState?.mode === "edit" ? "Edit VPN profile" : "Add VPN profile";
+  const modalTitle = modalState?.mode === "edit" ? "Edit VPN server" : "Add VPN server";
   const saveLabel =
     modalState?.mode === "edit"
       ? isSaving
@@ -1072,21 +1172,21 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         : "Save changes"
       : isSaving
         ? "Creating..."
-        : "Create profile";
+        : "Create server";
 
   return (
     <>
       <section style={cardStyle}>
         <div style={headerRowStyle}>
           <div>
-            <div style={eyebrowStyle}>Profiles</div>
+            <div style={eyebrowStyle}>Servers</div>
             <h2 style={pageTitleStyle}>VPNs</h2>
             <p style={helperTextStyle}>
-              Manage SSH-backed VPN profiles used by chains, routing, and export flows.
+              Manage SSH-backed VPN servers used by chains, routing, and export flows.
             </p>
           </div>
           <button onClick={() => setModalState({ mode: "create" })} style={primaryButtonStyle} type="button">
-            Add profile
+            Add server
           </button>
         </div>
 
@@ -1116,11 +1216,11 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
         {panelCopySuccess ? <div style={inlineSuccessStyle}>{panelCopySuccess}</div> : null}
 
         {profilesQuery.isPending ? (
-          <div style={emptyStateStyle}>Loading profiles...</div>
+          <div style={emptyStateStyle}>Loading servers...</div>
         ) : profilesQuery.isError ? (
           <div style={errorStyle}>{getErrorMessage(profilesQuery.error)}</div>
         ) : profiles.length === 0 ? (
-          <div style={emptyStateStyle}>No VPN profiles yet. Add one to get started.</div>
+          <div style={emptyStateStyle}>No VPN servers yet. Add one to get started.</div>
         ) : (
           <div style={tableWrapperStyle}>
             <table style={tableStyle}>
@@ -1207,11 +1307,29 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                         )}
                       </td>
                       <td style={tableBodyCellStyle}>
-                        {profile.operationalStatus === "working" ? (
-                          <span style={statusWorkingStyle}>Working</span>
-                        ) : (
-                          <span style={statusPendingStyle}>Pending</span>
-                        )}
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {profile.operationalStatus === "working" ? (
+                            <span style={statusWorkingStyle}>Working</span>
+                          ) : (
+                            <span style={statusPendingStyle}>Pending</span>
+                          )}
+                          <span
+                            style={panelReachabilityStyle}
+                            title={
+                              profile.panelReachability === "unreachable" && profile.panelReachabilityDetail
+                                ? profile.panelReachabilityDetail
+                                : undefined
+                            }
+                          >
+                            {profile.panelReachability === "checking"
+                              ? "Panel: checking…"
+                              : profile.panelReachability === "reachable"
+                                ? "Panel: OK"
+                                : profile.panelReachability === "unreachable"
+                                  ? "Panel: unreachable"
+                                  : "Panel: not checked"}
+                          </span>
+                        </div>
                       </td>
                       <td style={tableBodyCellStyle}>
                         <div style={actionRowStyle}>
@@ -1268,11 +1386,11 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
           <section style={modalCardStyle}>
             <div style={modalHeaderStyle}>
               <div>
-                <div style={eyebrowStyle}>{modalState.mode === "edit" ? "Update profile" : "New profile"}</div>
+                <div style={eyebrowStyle}>{modalState.mode === "edit" ? "Update server" : "New server"}</div>
                 <h3 style={modalTitleStyle}>{modalTitle}</h3>
               </div>
               <button
-                aria-label="Close profile modal"
+                aria-label="Close server modal"
                 disabled={isSaving}
                 onClick={() => setModalState(null)}
                 style={modalCloseButtonStyle}
@@ -1306,20 +1424,75 @@ export default function VpnsPage({ authUser }: { authUser: AuthUser | null }) {
                 />
               </label>
 
-              <label style={labelStyle}>
-                Panel address (FQDN or public IP)
-                <input
-                  onChange={(event) =>
-                    setFormValues((current) => ({ ...current, panelHostname: event.target.value }))
-                  }
-                  placeholder="panel.example.com or 203.0.113.10"
-                  style={inputStyle}
-                  value={formValues.panelHostname}
-                />
-                <span style={fieldHintStyle}>
-                  Required for HTTPS unless IP or Host is a public IP (then you may leave this empty).
-                </span>
-              </label>
+              <details style={advancedDetailsStyle}>
+                <summary style={advancedSummaryStyle}>Advanced</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "12px" }}>
+                  <label style={labelStyle}>
+                    Panel address (FQDN or public IP)
+                    <input
+                      onChange={(event) =>
+                        setFormValues((current) => ({ ...current, panelHostname: event.target.value }))
+                      }
+                      placeholder="panel.example.com or 203.0.113.10"
+                      style={inputStyle}
+                      value={formValues.panelHostname}
+                    />
+                    <span style={fieldHintStyle}>
+                      Required for HTTPS unless IP or Host is a public IP (then you may leave this empty).
+                    </span>
+                  </label>
+
+                  <label style={labelStyle}>
+                    Panel login
+                    <input
+                      autoComplete="off"
+                      onChange={(event) =>
+                        setFormValues((current) => ({ ...current, panelAdminUsername: event.target.value }))
+                      }
+                      style={inputStyle}
+                      value={formValues.panelAdminUsername}
+                    />
+                  </label>
+
+                  <label style={labelStyle}>
+                    Panel password
+                    <input
+                      autoComplete="new-password"
+                      onChange={(event) =>
+                        setFormValues((current) => ({ ...current, panelAdminPassword: event.target.value }))
+                      }
+                      style={inputStyle}
+                      type="password"
+                      value={formValues.panelAdminPassword}
+                    />
+                  </label>
+
+                  <label style={labelStyle}>
+                    Panel web base path (optional)
+                    <input
+                      onChange={(event) =>
+                        setFormValues((current) => ({ ...current, panelWebBasePath: event.target.value }))
+                      }
+                      placeholder="/yourRandomPath/"
+                      style={inputStyle}
+                      value={formValues.panelWebBasePath}
+                    />
+                  </label>
+
+                  <label style={labelStyle}>
+                    Panel HTTPS port (optional)
+                    <input
+                      inputMode="numeric"
+                      onChange={(event) =>
+                        setFormValues((current) => ({ ...current, panelHttpsPort: event.target.value }))
+                      }
+                      placeholder="443 (default if empty)"
+                      style={inputStyle}
+                      value={formValues.panelHttpsPort}
+                    />
+                  </label>
+                </div>
+              </details>
 
               <div style={formRowStyle}>
                 <label style={labelStyle}>
@@ -1498,6 +1671,26 @@ const statusWorkingStyle: CSSProperties = {
   fontWeight: 600,
   background: "#d1fae5",
   color: "#065f46",
+};
+
+const panelReachabilityStyle: CSSProperties = {
+  fontSize: "0.75rem",
+  fontWeight: 500,
+  color: "#4b5563",
+};
+
+const advancedDetailsStyle: CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: "12px",
+  padding: "12px 14px",
+  background: "#fafafa",
+};
+
+const advancedSummaryStyle: CSSProperties = {
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: "0.875rem",
+  color: "#374151",
 };
 
 const sshBackdropStyle: CSSProperties = {

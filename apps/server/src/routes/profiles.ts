@@ -77,6 +77,8 @@ function toProfileDto(row: VpnProfileRow, userId: number | null) {
     panelReachability: row.panel_reachability as "unknown" | "checking" | "reachable" | "unreachable",
     panelReachabilityDetail: row.panel_reachability_detail ?? null,
     panelReachabilityCheckedAt: row.panel_reachability_checked_at ?? null,
+    panelWebBasePath: row.xui_web_base_path,
+    panelHttpsPort: panelPort,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     panelUrl,
