@@ -19,6 +19,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** True when sudo/bash reports the reconcile script is absent on the remote host. */
+export function remoteUfwSyncScriptMissing(stderr: string, stdout: string): boolean {
+  const s = `${stderr}\n${stdout}`;
+  if (!s.includes("vpnmgr-xui-ufw-sync")) return false;
+  return s.includes("command not found") || s.includes("No such file or directory");
+}
+
 export async function runXuiUfwSyncWithRetries(args: RunXuiUfwSyncArgs): Promise<void> {
   const maxAttempts = args.maxAttempts ?? 4;
   const initialBackoffMs = args.initialBackoffMs ?? 250;
@@ -34,6 +41,9 @@ export async function runXuiUfwSyncWithRetries(args: RunXuiUfwSyncArgs): Promise
       knownHostsFile: args.knownHostsFile ?? undefined,
     });
     if (result.code === 0) return;
+    if (remoteUfwSyncScriptMissing(result.stderr, result.stdout)) {
+      return;
+    }
     lastStderr = result.stderr;
     if (attempt < maxAttempts) {
       const backoff = initialBackoffMs * 2 ** (attempt - 1);
