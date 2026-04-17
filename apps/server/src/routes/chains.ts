@@ -7,7 +7,8 @@ import { buildExportV2, ExportNotFoundError } from "../export/buildExport";
 import { buildPanelHttpsUrl } from "../net/panelAddress";
 import { buildVlessRealityInboundBody } from "../xui/buildVlessRealityInboundBody";
 import { generateRealityClientMaterial } from "../xui/realityKeyMaterial";
-import { PanelRequestError, provisionChainClientAccess } from "../xui/provisionChainClientAccess";
+import { debugAgentLog } from "../debugAgentLog";
+import { provisionChainClientAccess } from "../xui/provisionChainClientAccess";
 
 type ChainListRow = {
   chain_id: number;
@@ -44,41 +45,6 @@ type ChainUpdateBody = {
 
 function routingProfileNameForHop(chainName: string, position: number) {
   return `${chainName} hop ${position}`;
-}
-
-/** Avoid binding the new inbound to port 443, which usually hosts the panel reverse-proxy. */
-function pickEphemeralInboundPort(): number {
-  return 30000 + Math.floor(Math.random() * 15000);
-}
-
-function panelFetchTlsInsecureEnabled(): boolean {
-  const v = process.env.VPN_MANAGER_PANEL_FETCH_TLS_INSECURE?.trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
-}
-
-function createPanelFetch(): typeof fetch {
-  if (!panelFetchTlsInsecureEnabled()) {
-    return globalThis.fetch.bind(globalThis);
-  }
-  return (input: RequestInfo | URL, init?: RequestInit) =>
-    fetch(input, {
-      ...(init ?? {}),
-      tls: { rejectUnauthorized: false },
-    } as RequestInit & { tls: { rejectUnauthorized: boolean } });
-}
-
-function classifyGenerateProfileFailure(err: unknown): string {
-  if (err instanceof PanelRequestError) {
-    return "panel_request";
-  }
-  const text = err instanceof Error ? err.message : String(err);
-  if (/certificate|CERT_|unable to verify|TLS|SSL|self.?signed|HANDSHAKE|UNSAFE_|unknown ca/i.test(text)) {
-    return "tls";
-  }
-  if (/fetch failed|Failed to fetch|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo/i.test(text)) {
-    return "network";
-  }
-  return "unknown";
 }
 
 async function readJson(c: Context) {
@@ -450,7 +416,7 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
 
     const material = await generateRealityClientMaterial();
     const inboundBody = buildVlessRealityInboundBody({
-      port: pickEphemeralInboundPort(),
+      port: 443,
       remark: `chain-${id}-${Date.now()}`,
       clientEmail: `vpnmgr-${material.clientUuid}@chain-${id}.local`,
       clientUuid: material.clientUuid,
@@ -466,13 +432,24 @@ export function chainsRoutes(db: Database, env: Pick<Env, "masterKey">) {
         adminUsername: secrets.adminUsername,
         adminPassword: secrets.adminPassword,
         inboundBody: inboundBody as unknown as Record<string, unknown>,
-        fetchFn: createPanelFetch(),
+        fetchFn: globalThis.fetch,
       });
       return c.json(result);
     } catch (err) {
-      console.error("[generate-profile]", err instanceof Error ? err.message : err);
-      const reason = classifyGenerateProfileFailure(err);
-      return c.json({ error: "Panel request failed.", reason }, 502);
+      // #region agent log
+      debugAgentLog({
+        hypothesisId: "H0",
+        location: "chains.ts:generate-profile",
+        message: "provision threw (no secrets)",
+        data: {
+          chainId: id,
+          errName: err instanceof Error ? err.name : typeof err,
+          errHead: err instanceof Error ? err.message.slice(0, 120) : "",
+        },
+      });
+      // #endregion
+      // Do not forward panel or transport exception text to the client (avoid leaking internals).
+      return c.json({ error: "Panel request failed." }, 502);
     }
   });
 
