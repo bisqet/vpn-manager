@@ -1,5 +1,3 @@
-import { debugAgentLog } from "../debugAgentLog";
-
 export type ChainClientAccessResult = { vlessShareLink: string; subscriptionUrl: string };
 
 export type ProvisionChainClientAccessInput = {
@@ -68,47 +66,22 @@ function assertPanelJson(value: unknown): asserts value is PanelJson {
   }
 }
 
-async function readPanelJson(response: Response, stage: string): Promise<PanelJson> {
+async function readPanelJson(response: Response): Promise<PanelJson> {
   if (!response.ok) {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H1",
-      location: "provisionChainClientAccess.ts:readPanelJson",
-      message: "panel HTTP not ok",
-      data: { stage, status: response.status, ct: response.headers.get("content-type")?.slice(0, 40) ?? "" },
-    });
-    // #endregion
     throw new PanelRequestError(`panel HTTP ${response.status}`);
   }
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H2",
-      location: "provisionChainClientAccess.ts:readPanelJson",
-      message: "panel non-JSON body",
-      data: { stage, status: response.status },
-    });
-    // #endregion
     throw new PanelRequestError("panel returned non-JSON body");
   }
   assertPanelJson(body);
   return body;
 }
 
-function requireSuccess(json: PanelJson, fallbackMessage: string, stage: string): void {
+function requireSuccess(json: PanelJson, fallbackMessage: string): void {
   if (json.success !== true) {
-    // #region agent log
-    const msg = typeof json.msg === "string" ? json.msg : "";
-    debugAgentLog({
-      hypothesisId: "H4",
-      location: "provisionChainClientAccess.ts:requireSuccess",
-      message: "panel success false",
-      data: { stage, msgLen: msg.length, msgHead: msg.slice(0, 40) },
-    });
-    // #endregion
     throw new PanelRequestError(typeof json.msg === "string" && json.msg !== "" ? json.msg : fallbackMessage);
   }
 }
@@ -312,25 +285,6 @@ export async function provisionChainClientAccess(
   const base = panelBaseForProvision(input.panelBaseUrl);
   const fetchFn = input.fetchFn ?? fetch;
 
-  let panelHost = "";
-  try {
-    panelHost = new URL(base).hostname;
-  } catch {
-    panelHost = "(invalid-base)";
-  }
-  // #region agent log
-  debugAgentLog({
-    hypothesisId: "H1",
-    location: "provisionChainClientAccess.ts:provisionChainClientAccess",
-    message: "start provision",
-    data: {
-      panelHost,
-      baseLen: base.length,
-      panelHttpDowngrade: input.panelBaseUrl.trim().startsWith("https://") && base.startsWith("http://"),
-    },
-  });
-  // #endregion
-
   const loginUrl = new URL("login", base).href;
   const loginBody = new URLSearchParams({
     username: input.adminUsername,
@@ -338,121 +292,46 @@ export async function provisionChainClientAccess(
     twoFactorCode: "",
   });
 
-  let loginResponse: Response;
-  try {
-    loginResponse = await fetchFn(loginUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-        accept: "application/json",
-      },
-      body: loginBody.toString(),
-    });
-  } catch (e) {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H6",
-      location: "provisionChainClientAccess.ts:provisionChainClientAccess",
-      message: "login fetch threw",
-      data: {
-        errName: e instanceof Error ? e.name : "unknown",
-        errHead: e instanceof Error ? e.message.slice(0, 120) : "",
-      },
-    });
-    // #endregion
-    throw e;
-  }
-
-  // #region agent log
-  const scLines = readSetCookieLines(loginResponse.headers);
-  debugAgentLog({
-    hypothesisId: "H1",
-    location: "provisionChainClientAccess.ts:afterLoginFetch",
-    message: "login response meta",
-    data: {
-      status: loginResponse.status,
-      ok: loginResponse.ok,
-      setCookieLineCount: scLines.length,
+  const loginResponse = await fetchFn(loginUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      accept: "application/json",
     },
+    body: loginBody.toString(),
   });
-  // #endregion
 
-  const loginJson = await readPanelJson(loginResponse, "login");
-  requireSuccess(loginJson, "login failed", "login");
+  const scLines = readSetCookieLines(loginResponse.headers);
+
+  const loginJson = await readPanelJson(loginResponse);
+  requireSuccess(loginJson, "login failed");
 
   const cookieHeader = extractSessionCookieHeader(scLines);
   if (!cookieHeader) {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H3",
-      location: "provisionChainClientAccess.ts:cookie",
-      message: "no 3x-ui session cookie after login",
-      data: { setCookieLineCount: scLines.length, firstLinePrefix: scLines[0]?.slice(0, 24) ?? "" },
-    });
-    // #endregion
     throw new PanelRequestError("login succeeded but session cookie (3x-ui) was not set");
   }
 
   const addUrl = new URL("panel/api/inbounds/add", base).href;
-  let addResponse: Response;
-  try {
-    addResponse = await fetchFn(addUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        cookie: cookieHeader,
-      },
-      body: JSON.stringify(input.inboundBody),
-    });
-  } catch (e) {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H6",
-      location: "provisionChainClientAccess.ts:provisionChainClientAccess",
-      message: "add fetch threw",
-      data: {
-        errName: e instanceof Error ? e.name : "unknown",
-        errHead: e instanceof Error ? e.message.slice(0, 120) : "",
-      },
-    });
-    // #endregion
-    throw e;
-  }
-
-  // #region agent log
-  debugAgentLog({
-    hypothesisId: "H1",
-    location: "provisionChainClientAccess.ts:afterAddFetch",
-    message: "add response meta",
-    data: { status: addResponse.status, ok: addResponse.ok },
+  const addResponse = await fetchFn(addUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      cookie: cookieHeader,
+    },
+    body: JSON.stringify(input.inboundBody),
   });
-  // #endregion
 
-  const addJson = await readPanelJson(addResponse, "add");
-  requireSuccess(addJson, "add inbound failed", "add");
+  const addJson = await readPanelJson(addResponse);
+  requireSuccess(addJson, "add inbound failed");
 
-  let vlessShareLink: string;
-  let subscriptionUrl: string;
-  try {
-    const subId = parseSubIdFromInboundBody(input.inboundBody);
-    subscriptionUrl = buildSubscriptionUrl(base, subId);
-    vlessShareLink = resolveVlessShareLink({
-      panelBaseUrl: base,
-      inboundBody: input.inboundBody,
-      addJson,
-    });
-  } catch (e) {
-    // #region agent log
-    debugAgentLog({
-      hypothesisId: "H5",
-      location: "provisionChainClientAccess.ts:postAdd",
-      message: "post-add parse or vless build failed",
-      data: { errName: e instanceof Error ? e.name : "unknown", errHead: (e instanceof Error ? e.message : "").slice(0, 80) },
-    });
-    // #endregion
-    throw e;
-  }
+  const subId = parseSubIdFromInboundBody(input.inboundBody);
+  const subscriptionUrl = buildSubscriptionUrl(base, subId);
+  const vlessShareLink = resolveVlessShareLink({
+    panelBaseUrl: base,
+    inboundBody: input.inboundBody,
+    addJson,
+  });
 
   return { vlessShareLink, subscriptionUrl };
 }
