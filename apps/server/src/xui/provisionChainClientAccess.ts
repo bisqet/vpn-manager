@@ -1,3 +1,5 @@
+import { appendAgentSessionLog } from "../debug/agentDebugLog";
+
 export type ChainClientAccessResult = { vlessShareLink: string; subscriptionUrl: string };
 
 export type ProvisionChainClientAccessInput = {
@@ -135,6 +137,20 @@ export async function fetchInboundUsedPorts(input: {
     const portRaw = (row as { port?: unknown }).port;
     const port = typeof portRaw === "number" ? portRaw : typeof portRaw === "string" ? Number(portRaw) : NaN;
     if (Number.isFinite(port) && port > 0 && port <= 65535) used.add(Math.trunc(port));
+  }
+  if (process.env.VPN_MANAGER_AGENT_DEBUG?.trim() === "1") {
+    appendAgentSessionLog({
+      sessionId: "ac8c04",
+      timestamp: Date.now(),
+      location: "provisionChainClientAccess.ts:fetchInboundUsedPorts",
+      message: "inbounds_list_ports",
+      hypothesisId: "H-parse",
+      data: {
+        usedCount: used.size,
+        objKind: typeof json.obj,
+        parsedArray: Array.isArray(rows),
+      },
+    });
   }
   return used;
 }
